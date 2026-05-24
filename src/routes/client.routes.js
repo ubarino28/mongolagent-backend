@@ -250,7 +250,7 @@ router.get("/profile", async (req, res) => {
     const prisma = getPrisma();
     const org = await prisma.organization.findUnique({
       where: { id: req.org.orgId },
-      select: { id: true, name: true, slug: true, email: true, plan: true, fbPageId: true, status: true, createdAt: true },
+      select: { id: true, name: true, slug: true, email: true, plan: true, status: true, fbPageId: true, fbPageToken: true, telegramBotToken: true, telegramChatId: true, createdAt: true },
     });
     res.json(org);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -265,6 +265,19 @@ router.put("/profile/facebook", async (req, res) => {
     await prisma.organization.update({
       where: { id: req.org.orgId },
       data: { fbPageId, fbPageToken },
+    });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /client/profile/telegram
+router.put("/profile/telegram", async (req, res) => {
+  try {
+    const { telegramBotToken, telegramChatId } = req.body;
+    const prisma = getPrisma();
+    await prisma.organization.update({
+      where: { id: req.org.orgId },
+      data: { telegramBotToken: telegramBotToken || null, telegramChatId: telegramChatId || null },
     });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
