@@ -13,10 +13,11 @@ model Organization {
   slug         String   @unique
   email        String   @unique
   passwordHash String
-  fbPageId     String?  @unique
-  fbPageToken  String?
-  telegramBotToken String?
-  telegramChatId   String?
+  fbPageId          String?  @unique
+  fbPageToken       String?
+  instagramAccountId String?
+  telegramBotToken  String?
+  telegramChatId    String?
   plan         String   @default("starter")
   status       String   @default("active")
   createdAt    DateTime @default(now())

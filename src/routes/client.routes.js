@@ -1,11 +1,96 @@
 "use strict";
 const express = require("express");
+const axios = require("axios");
+const jwt = require("jsonwebtoken");
 const { getPrisma } = require("../lib/db");
 const { clientAuthMiddleware } = require("../middleware/clientAuth");
 const { sendText } = require("../services/facebook.service");
 
 const router = express.Router();
+
+const API_URL = process.env.API_URL || "https://turuuai-backend.onrender.com";
+const FRONTEND_URL = process.env.FRONTEND_APP_URL || "https://turuuai-app.vercel.app";
+const FB_CALLBACK = `${API_URL}/client/profile/facebook/callback`;
+
+// Facebook OAuth callback — auth middleware байхгүй (Facebook-аас ирдэг)
+router.get("/profile/facebook/callback", async (req, res) => {
+  const { code, state } = req.query;
+  if (!code || !state) return res.redirect(`${FRONTEND_URL}/profile?fb_error=true`);
+
+  try {
+    const { orgId } = JSON.parse(Buffer.from(String(state), "base64").toString());
+
+    const tokenRes = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", {
+      params: {
+        client_id: process.env.FB_APP_ID,
+        client_secret: process.env.FB_APP_SECRET,
+        redirect_uri: FB_CALLBACK,
+        code,
+      },
+    });
+    const userToken = tokenRes.data.access_token;
+
+    const pagesRes = await axios.get("https://graph.facebook.com/v19.0/me/accounts", {
+      params: { access_token: userToken, fields: "id,name,access_token,category,picture" },
+    });
+    const pages = pagesRes.data.data || [];
+
+    // Instagram аккаунтуудыг page-аас авна
+    const pagesWithIg = await Promise.all(
+      pages.map(async (p) => {
+        try {
+          const igRes = await axios.get(`https://graph.facebook.com/v19.0/${p.id}`, {
+            params: { fields: "instagram_business_account{id,name,username}", access_token: p.access_token },
+          });
+          return { ...p, instagram: igRes.data.instagram_business_account || null };
+        } catch { return { ...p, instagram: null }; }
+      })
+    );
+
+    const encoded = Buffer.from(JSON.stringify(pagesWithIg)).toString("base64");
+    res.redirect(`${FRONTEND_URL}/profile?fb_pages=${encoded}&fb_org=${orgId}`);
+  } catch (err) {
+    console.error("[FB OAuth] callback error:", err.response?.data || err.message);
+    res.redirect(`${FRONTEND_URL}/profile?fb_error=true`);
+  }
+});
+
+// All routes below require auth
 router.use(clientAuthMiddleware);
+
+// GET /client/profile/facebook/auth-url
+router.get("/profile/facebook/auth-url", (req, res) => {
+  const state = Buffer.from(JSON.stringify({ orgId: req.org.orgId })).toString("base64");
+  const scope = [
+    "pages_messaging",
+    "pages_show_list",
+    "pages_manage_metadata",
+    "pages_read_engagement",
+    "instagram_basic",
+    "instagram_manage_messages",
+  ].join(",");
+
+  const url = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FB_APP_ID}&redirect_uri=${encodeURIComponent(FB_CALLBACK)}&scope=${scope}&state=${state}`;
+  res.json({ url });
+});
+
+// POST /client/profile/facebook/select-page
+router.post("/profile/facebook/select-page", async (req, res) => {
+  try {
+    const { pageId, pageName, pageToken, instagramId } = req.body;
+    if (!pageId || !pageToken) return res.status(400).json({ error: "pageId, pageToken шаардлагатай" });
+    const prisma = getPrisma();
+    await prisma.organization.update({
+      where: { id: req.org.orgId },
+      data: {
+        fbPageId: pageId,
+        fbPageToken: pageToken,
+        ...(instagramId && { instagramAccountId: instagramId }),
+      },
+    });
+    res.json({ ok: true, pageName });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // GET /client/stats
 router.get("/stats", async (req, res) => {
