@@ -65,9 +65,6 @@ router.get("/profile/facebook/auth-url", (req, res) => {
     "pages_messaging",
     "pages_show_list",
     "pages_manage_metadata",
-    "pages_read_engagement",
-    "instagram_basic",
-    "instagram_manage_messages",
   ].join(",");
 
   const url = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FB_APP_ID}&redirect_uri=${encodeURIComponent(FB_CALLBACK)}&scope=${scope}&state=${state}`;
