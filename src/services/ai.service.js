@@ -16,17 +16,17 @@ const TOOLS = [
     type: "function",
     function: {
       name: "save_lead",
-      description: "Хэрэглэгч үйлчилгээ сонирхоход нэр, холбоо барих мэдээлэл хадгална. Дараа нь манай баг холбогдоно.",
+      description: "Хэрэглэгч үйлчилгээ сонирхоход нэр, холбоо барих мэдээлэл хадгална.",
       parameters: {
         type: "object",
         properties: {
-          name:            { type: "string", description: "Хэрэглэгчийн нэр" },
-          phone:           { type: "string", description: "Утасны дугаар" },
-          email:           { type: "string", description: "Имэйл хаяг" },
-          company:         { type: "string", description: "Компани/бизнесийн нэр" },
-          serviceInterest: { type: "string", description: "Сонирхож буй үйлчилгээ" },
-          budget:          { type: "string", description: "Төсөв (хэрэв дурдсан бол)" },
-          notes:           { type: "string", description: "Нэмэлт мэдээлэл" },
+          name:            { type: "string" },
+          phone:           { type: "string" },
+          email:           { type: "string" },
+          company:         { type: "string" },
+          serviceInterest: { type: "string" },
+          budget:          { type: "string" },
+          notes:           { type: "string" },
         },
         required: ["phone"],
       },
@@ -40,11 +40,11 @@ const TOOLS = [
       parameters: {
         type: "object",
         properties: {
-          name:            { type: "string", description: "Хэрэглэгчийн нэр" },
-          phone:           { type: "string", description: "Утасны дугаар" },
-          email:           { type: "string", description: "Имэйл хаяг" },
-          serviceInterest: { type: "string", description: "Ямар үйлчилгээний талаар ярилцахыг хүсэж байна" },
-          preferredTime:   { type: "string", description: "Хүссэн цаг/өдөр" },
+          name:            { type: "string" },
+          phone:           { type: "string" },
+          email:           { type: "string" },
+          serviceInterest: { type: "string" },
+          preferredTime:   { type: "string" },
         },
         required: ["phone"],
       },
@@ -52,11 +52,11 @@ const TOOLS = [
   },
 ];
 
-async function loadAISettings() {
+async function loadAISettings(orgId = null) {
   try {
     const prisma = getPrisma();
     const rows = await prisma.turuuSettings.findMany({
-      where: { key: { in: ["ai_model", "ai_temperature", "ai_max_tokens"] } },
+      where: { orgId, key: { in: ["ai_model", "ai_temperature", "ai_max_tokens"] } },
     });
     const s = {};
     rows.forEach((r) => { s[r.key] = r.value; });
@@ -70,23 +70,21 @@ async function loadAISettings() {
   }
 }
 
-async function processMessage(psid, userText) {
-  // Check if user is blocked
+async function processMessage(psid, userText, orgId = null) {
+  // Check if blocked
   try {
     const prisma = getPrisma();
-    const chatRecord = await prisma.turuuChat.findUnique({ where: { psid } });
+    const chatRecord = await prisma.turuuChat.findFirst({ where: { psid, orgId } });
     if (chatRecord?.blocked) return null;
-  } catch {
-    // proceed if DB check fails
-  }
+  } catch { /* proceed */ }
 
   const [isNew, history, aiSettings] = await Promise.all([
-    isNewConversation(psid),
-    getHistory(psid),
-    loadAISettings(),
+    isNewConversation(psid, orgId),
+    getHistory(psid, orgId),
+    loadAISettings(orgId),
   ]);
 
-  const systemPrompt = await buildSystemPrompt(isNew);
+  const systemPrompt = await buildSystemPrompt(isNew, orgId);
 
   const messages = [
     { role: "system", content: systemPrompt },
@@ -111,22 +109,20 @@ async function processMessage(psid, userText) {
     const args = JSON.parse(toolCall.function.arguments);
 
     if (toolCall.function.name === "save_lead") {
-      await saveLead({ psid, ...args });
+      await saveLead({ psid, orgId, ...args });
       replyText = `Баярлалаа 😊 Таны мэдээллийг хүлээн авлаа. Манай мэргэжилтэн удахгүй тантай холбогдоно.`;
     } else if (toolCall.function.name === "save_consultation") {
-      await saveConsultation({ psid, ...args });
-      replyText = `Consultation захиалга амжилттай бүртгэгдлээ 😊 Бид тантай ${args.preferredTime ? args.preferredTime + " орчим" : "удахгүй"} холбогдоно. Баярлалаа!`;
+      await saveConsultation({ psid, orgId, ...args });
+      replyText = `Consultation захиалга амжилттай бүртгэгдлээ 😊 Бид тантай ${args.preferredTime ? args.preferredTime + " орчим" : "удахгүй"} холбогдоно.`;
     }
-
-    const updatedMessages = [
-      ...messages,
-      choice.message,
-      { role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) },
-    ];
 
     const followUp = await getOpenAI().chat.completions.create({
       model: aiSettings.model,
-      messages: updatedMessages,
+      messages: [
+        ...messages,
+        choice.message,
+        { role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) },
+      ],
       temperature: aiSettings.temperature,
       max_tokens: 512,
     });
@@ -137,12 +133,7 @@ async function processMessage(psid, userText) {
     replyText = choice.message.content?.trim() || "";
   }
 
-  const newHistory = [
-    ...history,
-    { role: "user", content: userText },
-    { role: "assistant", content: replyText },
-  ];
-  await saveHistory(psid, newHistory);
+  await saveHistory(psid, [...history, { role: "user", content: userText }, { role: "assistant", content: replyText }], orgId);
 
   return replyText;
 }

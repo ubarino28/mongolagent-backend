@@ -171,7 +171,7 @@ router.get("/conversations", async (req, res) => {
 router.get("/conversations/:psid", async (req, res) => {
   try {
     const prisma = getPrisma();
-    const chat = await prisma.turuuChat.findUnique({ where: { psid: req.params.psid } });
+    const chat = await prisma.turuuChat.findFirst({ where: { psid: req.params.psid } });
     if (!chat) return res.status(404).json({ error: "Not found" });
     res.json(chat);
   } catch (e) {
@@ -188,12 +188,12 @@ router.post("/conversations/:psid/reply", async (req, res) => {
     await sendText(req.params.psid, text);
 
     const prisma = getPrisma();
-    const chat = await prisma.turuuChat.findUnique({ where: { psid: req.params.psid } });
+    const chat = await prisma.turuuChat.findFirst({ where: { psid: req.params.psid } });
     const messages = Array.isArray(chat?.messages) ? [...chat.messages] : [];
     messages.push({ role: "assistant", content: `[Admin] ${text}` });
     await prisma.turuuChat.upsert({
-      where: { psid: req.params.psid },
-      create: { psid: req.params.psid, messages },
+      where: { orgId_psid: { orgId: null, psid: req.params.psid } },
+      create: { psid: req.params.psid, orgId: null, messages },
       update: { messages },
     });
 
@@ -209,8 +209,8 @@ router.put("/conversations/:psid/block", async (req, res) => {
     const prisma = getPrisma();
     const { blocked } = req.body;
     const chat = await prisma.turuuChat.upsert({
-      where: { psid: req.params.psid },
-      create: { psid: req.params.psid, blocked: !!blocked },
+      where: { orgId_psid: { orgId: null, psid: req.params.psid } },
+      create: { psid: req.params.psid, orgId: null, blocked: !!blocked },
       update: { blocked: !!blocked },
     });
     res.json(chat);
@@ -278,7 +278,7 @@ router.delete("/knowledge/:id", async (req, res) => {
 router.get("/settings", async (req, res) => {
   try {
     const prisma = getPrisma();
-    const rows = await prisma.turuuSettings.findMany();
+    const rows = await prisma.turuuSettings.findMany({ where: { orgId: null } });
     const map = {};
     rows.forEach((r) => { map[r.key] = r.value; });
     res.json(map);
@@ -294,8 +294,8 @@ router.put("/settings", async (req, res) => {
     const updates = req.body;
     const ops = Object.entries(updates).map(([key, value]) =>
       prisma.turuuSettings.upsert({
-        where: { key },
-        create: { key, value: String(value) },
+        where: { orgId_key: { orgId: null, key } },
+        create: { orgId: null, key, value: String(value) },
         update: { value: String(value) },
       })
     );

@@ -7,18 +7,38 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Organization {
+  id           String   @id @default(uuid())
+  name         String
+  slug         String   @unique
+  email        String   @unique
+  passwordHash String
+  fbPageId     String?  @unique
+  fbPageToken  String?
+  telegramBotToken String?
+  telegramChatId   String?
+  plan         String   @default("starter")
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
 model TuruuChat {
   id        String   @id @default(uuid())
-  psid      String   @unique
+  psid      String
+  orgId     String?
   messages  Json     @default("[]")
   blocked   Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([orgId, psid])
 }
 
 model TuruuLead {
   id              String   @id @default(uuid())
   psid            String
+  orgId           String?
   name            String?
   phone           String?
   email           String?
@@ -34,6 +54,7 @@ model TuruuLead {
 model TuruuConsultation {
   id              String   @id @default(uuid())
   psid            String
+  orgId           String?
   name            String?
   phone           String?
   email           String?
@@ -45,13 +66,17 @@ model TuruuConsultation {
 
 model TuruuSettings {
   id        String   @id @default(uuid())
-  key       String   @unique
+  orgId     String?
+  key       String
   value     String
   updatedAt DateTime @updatedAt
+
+  @@unique([orgId, key])
 }
 
 model TuruuKnowledge {
   id        String   @id @default(uuid())
+  orgId     String?
   question  String
   answer    String
   category  String?
