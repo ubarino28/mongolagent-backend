@@ -11,6 +11,8 @@ model TuruuChat {
   id        String   @id @default(uuid())
   psid      String   @unique
   messages  Json     @default("[]")
+  blocked   Boolean  @default(false)
+  createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
@@ -39,4 +41,21 @@ model TuruuConsultation {
   preferredTime   String?
   status          String   @default("PENDING")
   createdAt       DateTime @default(now())
+}
+
+model TuruuSettings {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model TuruuKnowledge {
+  id        String   @id @default(uuid())
+  question  String
+  answer    String
+  category  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

@@ -3,6 +3,7 @@ const OpenAI = require("openai");
 const { buildSystemPrompt } = require("../lib/prompt");
 const { getHistory, saveHistory, isNewConversation } = require("../lib/history");
 const { saveLead, saveConsultation } = require("./lead.service");
+const { getPrisma } = require("../lib/db");
 
 let openai;
 function getOpenAI() {
@@ -51,23 +52,55 @@ const TOOLS = [
   },
 ];
 
+async function loadAISettings() {
+  try {
+    const prisma = getPrisma();
+    const rows = await prisma.turuuSettings.findMany({
+      where: { key: { in: ["ai_model", "ai_temperature", "ai_max_tokens"] } },
+    });
+    const s = {};
+    rows.forEach((r) => { s[r.key] = r.value; });
+    return {
+      model: s.ai_model || "gpt-4o-mini",
+      temperature: parseFloat(s.ai_temperature || "0.4"),
+      max_tokens: parseInt(s.ai_max_tokens || "1024"),
+    };
+  } catch {
+    return { model: "gpt-4o-mini", temperature: 0.4, max_tokens: 1024 };
+  }
+}
+
 async function processMessage(psid, userText) {
-  const isNew = await isNewConversation(psid);
-  const history = await getHistory(psid);
+  // Check if user is blocked
+  try {
+    const prisma = getPrisma();
+    const chatRecord = await prisma.turuuChat.findUnique({ where: { psid } });
+    if (chatRecord?.blocked) return null;
+  } catch {
+    // proceed if DB check fails
+  }
+
+  const [isNew, history, aiSettings] = await Promise.all([
+    isNewConversation(psid),
+    getHistory(psid),
+    loadAISettings(),
+  ]);
+
+  const systemPrompt = await buildSystemPrompt(isNew);
 
   const messages = [
-    { role: "system", content: buildSystemPrompt(isNew) },
+    { role: "system", content: systemPrompt },
     ...history,
     { role: "user", content: userText },
   ];
 
   const response = await getOpenAI().chat.completions.create({
-    model: "gpt-4o-mini",
+    model: aiSettings.model,
     messages,
     tools: TOOLS,
     tool_choice: "auto",
-    temperature: 0.4,
-    max_tokens: 1024,
+    temperature: aiSettings.temperature,
+    max_tokens: aiSettings.max_tokens,
   });
 
   const choice = response.choices[0];
@@ -85,18 +118,16 @@ async function processMessage(psid, userText) {
       replyText = `Consultation захиалга амжилттай бүртгэгдлээ 😊 Бид тантай ${args.preferredTime ? args.preferredTime + " орчим" : "удахгүй"} холбогдоно. Баярлалаа!`;
     }
 
-    // Tool call-ийн дараа AI-г үргэлжлүүлэхэд tool result нэмнэ
     const updatedMessages = [
       ...messages,
       choice.message,
       { role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) },
     ];
 
-    // Хэрэв AI нэмэлт текст хариулт гаргавал авна
     const followUp = await getOpenAI().chat.completions.create({
-      model: "gpt-4o-mini",
+      model: aiSettings.model,
       messages: updatedMessages,
-      temperature: 0.4,
+      temperature: aiSettings.temperature,
       max_tokens: 512,
     });
     const followText = followUp.choices[0].message.content?.trim();
@@ -106,7 +137,6 @@ async function processMessage(psid, userText) {
     replyText = choice.message.content?.trim() || "";
   }
 
-  // Яриа түүх хадгал
   const newHistory = [
     ...history,
     { role: "user", content: userText },
