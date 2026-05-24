@@ -19,6 +19,10 @@ const allowedOrigins = [
   "https://app.turuuai.mn",
   "https://turuuai-admin.vercel.app",
   "https://turuuai-app.vercel.app",
+  "https://mongolagent.mn",
+  "https://www.mongolagent.mn",
+  "https://app.mongolagent.mn",
+  "https://admin.mongolagent.mn",
 ];
 
 app.use(cors({
