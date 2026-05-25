@@ -509,6 +509,98 @@ router.delete("/unanswered/:id", async (req, res) => {
   }
 });
 
+// GET /admin/health/business — бизнесийн pulse, quota alerts, OpenAI usage, connectivity
+router.get("/health/business", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const weekAgo = new Date(Date.now() - 7 * 86400000);
+
+    const QUOTA_MAP = { starter: 10000, growth: 15000, business: 15000, enterprise: 17000, free: 500 };
+    const MSG_COST = 0.0001; // ~$0.0001 per message (GPT-4o-mini estimate)
+
+    const [
+      convsToday, leadsToday, leadsWeek,
+      lastActivity, unansweredCount, unansweredWeek,
+      allOrgs, kbGrouped,
+    ] = await Promise.all([
+      prisma.turuuChat.count({ where: { updatedAt: { gte: todayStart } } }),
+      prisma.turuuLead.count({ where: { createdAt: { gte: todayStart } } }),
+      prisma.turuuLead.count({ where: { createdAt: { gte: weekAgo } } }),
+      prisma.turuuChat.findFirst({ orderBy: { updatedAt: "desc" }, select: { updatedAt: true } }),
+      prisma.turuuUnanswered.count({ where: { resolved: false } }),
+      prisma.turuuUnanswered.count({ where: { resolved: false, createdAt: { gte: weekAgo } } }),
+      prisma.organization.findMany({
+        select: { id: true, name: true, plan: true, status: true, messageUsed: true, subscriptionEndsAt: true, fbPageId: true },
+      }),
+      prisma.turuuKnowledge.groupBy({ by: ["orgId"], _count: { id: true } }),
+    ]);
+
+    // OpenAI usage aggregate
+    const totalMessages = allOrgs.reduce((s, o) => s + (o.messageUsed || 0), 0);
+    const estimatedCost = (totalMessages * MSG_COST).toFixed(2);
+    const topConsumers = [...allOrgs]
+      .sort((a, b) => b.messageUsed - a.messageUsed)
+      .slice(0, 5)
+      .map((o) => ({ id: o.id, name: o.name, plan: o.plan, messageUsed: o.messageUsed, quota: QUOTA_MAP[o.plan] || 10000 }));
+
+    // Quota alerts
+    const quotaAlerts = allOrgs
+      .filter((o) => {
+        const quota = QUOTA_MAP[o.plan] || 10000;
+        return (o.messageUsed / quota) >= 0.8;
+      })
+      .map((o) => {
+        const quota = QUOTA_MAP[o.plan] || 10000;
+        return { id: o.id, name: o.name, plan: o.plan, messageUsed: o.messageUsed, quota, pct: Math.round((o.messageUsed / quota) * 100) };
+      })
+      .sort((a, b) => b.pct - a.pct);
+
+    // Expired subscriptions
+    const now = new Date();
+    const expiredOrgs = allOrgs.filter((o) => o.subscriptionEndsAt && new Date(o.subscriptionEndsAt) < now);
+    const expiringSoon = allOrgs.filter((o) => {
+      if (!o.subscriptionEndsAt) return false;
+      const d = Math.ceil((new Date(o.subscriptionEndsAt) - now) / 86400000);
+      return d >= 0 && d <= 7;
+    });
+
+    // Connectivity overview
+    const kbOrgIds = new Set(kbGrouped.map((g) => g.orgId).filter(Boolean));
+    const fbConnected = allOrgs.filter((o) => o.fbPageId).length;
+    const kbConfigured = allOrgs.filter((o) => kbOrgIds.has(o.id)).length;
+    const activeStatus = allOrgs.filter((o) => o.status === "active").length;
+
+    res.json({
+      pulse: {
+        convsToday,
+        leadsToday,
+        leadsWeek,
+        lastActivity: lastActivity?.updatedAt || null,
+        unansweredCount,
+        unansweredWeek,
+      },
+      openai: {
+        totalMessages,
+        estimatedCostUSD: estimatedCost,
+        topConsumers,
+      },
+      quotaAlerts,
+      expiredOrgs: expiredOrgs.map((o) => ({ id: o.id, name: o.name, plan: o.plan, subscriptionEndsAt: o.subscriptionEndsAt })),
+      expiringSoon: expiringSoon.map((o) => ({ id: o.id, name: o.name, plan: o.plan, subscriptionEndsAt: o.subscriptionEndsAt })),
+      connectivity: {
+        total: allOrgs.length,
+        activeStatus,
+        fbConnected,
+        kbConfigured,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /admin/health/detailed — system health check
 router.get("/health/detailed", async (req, res) => {
   const result = { db: "ok", openai: "ok", timestamp: new Date().toISOString() };
