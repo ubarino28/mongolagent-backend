@@ -53,6 +53,12 @@ AI-аас цуглуулсан potential customers.
 ### TuruuConsultation
 Consultation захиалгууд.
 
+### PasswordResetToken
+Нууц үг сэргээх token.
+- `token`: crypto.randomBytes(32) — unique
+- `expiresAt`: 30 минутын хугацаатай
+- `used`: ашиглагдсан эсэх
+
 ## AI Chatbot
 
 **Persona:** Аги — Түрүү AI компанийн мэргэжлийн, найрсаг туслах
@@ -97,26 +103,39 @@ Webhooks → "Add Subscriptions" → таны page сонго
 
 ## Environment Variables (Render)
 
-| Var | Тайлбар |
+| Var | Утга / Тайлбар |
 |-----|---------|
-| `DATABASE_URL` | Supabase PostgreSQL (port 5432 эсвэл pooler) |
+| `DATABASE_URL` | `postgresql://postgres.wiutpxluvtagqlnohzmj:N3c67ABY0MzWei0m@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true` |
 | `OPENAI_API_KEY` | OpenAI API key |
+| `RESEND_API_KEY` | `re_BjsbWghU_GFGEa413HmVwZeS4mQYcmj5o` |
+| `FROM_EMAIL` | `noreply@mongolagent.mn` |
+| `APP_URL` | `https://app.mongolagent.mn` |
 | `FB_PAGE_ACCESS_TOKEN` | Facebook Page Access Token |
-| `FB_VERIFY_TOKEN` | Webhook verify token (дурын нууц үг) |
+| `FB_VERIFY_TOKEN` | `turuuai_webhook_2024` |
 | `TELEGRAM_BOT_TOKEN` | Lead мэдэгдлийн Telegram bot (заавал биш) |
 | `TELEGRAM_CHAT_ID` | Telegram group/channel ID (заавал биш) |
 
+> ⚠️ **Чухал:** `DATABASE_URL`-д `?pgbouncer=true` заавал байх ёстой — эс тэгвэл Supabase Transaction Pooler дээр `prepared statement already exists` алдаа гарна.
+> `gZ44VooW5sl4PxUw` нь **Kitty House**-ийн нууц үг. Turuuai-ийнх: `N3c67ABY0MzWei0m`
+
+## Supabase Projects
+
+| Проект | Project Ref | Нууц үг | Зориулалт |
+|--------|-------------|---------|-----------|
+| turuuai-backend | `wiutpxluvtagqlnohzmj` | `N3c67ABY0MzWei0m` | Энэ backend |
+| kittyhouse | `kmydhgtqtptguwmxxrax` | `gZ44VooW5sl4PxUw` | Kitty House demo |
+
 ## Deployment (Render)
 
-1. GitHub-т push хийнэ
-2. Render → "New Web Service" → GitHub repo холбоно
-3. Build command: `npm install && npm run db:generate`
-4. Start command: `npm start`
-5. Environment variables нэмнэ
+1. GitHub-т push хийнэ → Render автоматаар deploy хийнэ
+2. Build command: `npm install && npm run db:generate` (**db:push байхгүй**)
+3. Start command: `npm start`
 
-### Schema өөрчлөх үед (Render Shell):
+> ⚠️ `db:push`-ийг build command-д **оруулахгүй** — runtime-д authentication алдаа гарна.
+
+### Schema өөрчлөх үед (Render Shell-ээс гараар):
 ```bash
-DATABASE_URL="$(echo $DATABASE_URL | sed 's/:6543/:5432/g')" npx prisma db push
+DATABASE_URL="$(echo $DATABASE_URL | sed 's/:6543/:5432/g')" npx prisma db push --accept-data-loss
 ```
 
 ## Үйлчилгээ & Үнэ (prompt.js-д байгаа, засах боломжтой)
@@ -133,6 +152,21 @@ DATABASE_URL="$(echo $DATABASE_URL | sed 's/:6543/:5432/g')" npx prisma db push
 | Monthly retainer | 500,000₮/сар |
 
 **Үнэ өөрчлөхөд:** `src/lib/prompt.js` → ҮЙЛЧИЛГЭЭ БА ҮНЭ хэсгийг засна.
+
+## Нэмэгдсэн API Endpoints (сүүлийн үеийн өөрчлөлт)
+
+| Method | Path | Тайлбар |
+|--------|------|---------|
+| POST | `/auth/forgot-password` | Нууц үг сэргээх имэйл явуулна (Resend) |
+| POST | `/auth/reset-password` | Token шалгаад нууц үг шинэчилнэ |
+| POST | `/client/chat` | Client-аас шууд AI-тай харилцах (auth шаардлагатай) |
+
+## Frontend (turuuai-app) өөрчлөлтүүд
+
+- `/forgot-password` — имэйл оруулж reset link авах хуудас
+- `/reset-password?token=...` — шинэ нууц үг тохируулах хуудас
+- `/chat` — ChatGPT маягийн AI чат (org-ийн system prompt ашиглана)
+- Sidebar-д "AI Чат" холбоос нэмэгдсэн
 
 ## Showcase (Kitty House)
 
