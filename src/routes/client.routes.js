@@ -298,6 +298,161 @@ router.delete("/knowledge/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /client/settings/builder — Builder AI: бизнесийн мэдээллээс мэдлэгийн сан үүсгэнэ
+router.post("/settings/builder", async (req, res) => {
+  try {
+    const { message, history = [] } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: "message шаардлагатай" });
+
+    const orgId = req.org.orgId;
+    const prisma = getPrisma();
+    const OpenAI = require("openai");
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const BUILDER_SYSTEM = `Чи Монголын бизнес эздэд AI chatbot тохируулахад туслах мэргэжилтэн.
+
+Үүрэг: Бизнес эзэнтэй байгалийн яриа өрнүүлж тэдний бизнесийн мэдээллийг цуглуулан мэдлэгийн сан болон system prompt үүсгэнэ.
+
+Цуглуулах мэдээлэл:
+- Бизнесийн нэр, төрөл
+- Бүтээгдэхүүн/үйлчилгээ болон үнэ
+- Хүргэлт, нөхцөл
+- Ажлын цаг, байршил
+- Холбоо барих
+- AI chatbot-оос юу хийлгэхийг хүсч байна
+
+Дүрэм:
+- Монгол хэлээр найрсаг, товч ярина
+- Мэдээлэл ирэхэд save_knowledge_items дуудна
+- Хангалттай мэдээлэл цуглуулсны дараа update_system_prompt дуудна
+- Хадгалсны дараа юу нэмэгдсэнийг мэдэгдэнэ
+- Нэмэлт мэдээлэл асуух
+- Мэдлэгийн санг дахин эхлүүлэхийг хүсвэл clear_knowledge дуудна`;
+
+    const BUILDER_TOOLS = [
+      {
+        type: "function",
+        function: {
+          name: "save_knowledge_items",
+          description: "Бизнесийн мэдээллээс Q&A цуглуулж мэдлэгийн санд хадгална",
+          parameters: {
+            type: "object",
+            properties: {
+              items: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    question: { type: "string" },
+                    answer: { type: "string" },
+                    category: { type: "string" },
+                  },
+                  required: ["question", "answer"],
+                },
+              },
+            },
+            required: ["items"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "update_system_prompt",
+          description: "AI chatbot-ын үндсэн system prompt шинэчилнэ",
+          parameters: {
+            type: "object",
+            properties: {
+              prompt: { type: "string" },
+            },
+            required: ["prompt"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "clear_knowledge",
+          description: "Бүх мэдлэгийн санг устгаж дахин эхлэнэ",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+
+    const messages = [
+      { role: "system", content: BUILDER_SYSTEM },
+      ...history.slice(-20),
+      { role: "user", content: message.trim() },
+    ];
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages,
+      tools: BUILDER_TOOLS,
+      tool_choice: "auto",
+      temperature: 0.3,
+      max_tokens: 1024,
+    });
+
+    const choice = response.choices[0];
+    let reply = "";
+    let savedItems = 0;
+    let promptUpdated = false;
+    let cleared = false;
+
+    if (choice.finish_reason === "tool_calls") {
+      const toolCalls = choice.message.tool_calls;
+      const toolResults = [];
+
+      for (const toolCall of toolCalls) {
+        const args = JSON.parse(toolCall.function.arguments);
+
+        if (toolCall.function.name === "save_knowledge_items") {
+          for (const item of args.items) {
+            await prisma.turuuKnowledge.create({
+              data: { orgId, question: item.question, answer: item.answer, category: item.category || null },
+            });
+          }
+          savedItems += args.items.length;
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ saved: args.items.length }) });
+        }
+
+        if (toolCall.function.name === "update_system_prompt") {
+          await prisma.turuuSettings.upsert({
+            where: { orgId_key: { orgId, key: "system_prompt" } },
+            create: { orgId, key: "system_prompt", value: args.prompt },
+            update: { value: args.prompt },
+          });
+          promptUpdated = true;
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true }) });
+        }
+
+        if (toolCall.function.name === "clear_knowledge") {
+          await prisma.turuuKnowledge.deleteMany({ where: { orgId } });
+          cleared = true;
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true }) });
+        }
+      }
+
+      const followUp = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          ...messages,
+          choice.message,
+          ...toolResults.map((r) => ({ role: "tool", tool_call_id: r.tool_call_id, content: r.content })),
+        ],
+        temperature: 0.3,
+        max_tokens: 512,
+      });
+      reply = followUp.choices[0].message.content?.trim() || "";
+    } else {
+      reply = choice.message.content?.trim() || "";
+    }
+
+    res.json({ reply, savedItems, promptUpdated, cleared });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /client/settings
 router.get("/settings", async (req, res) => {
   try {
