@@ -219,11 +219,27 @@ router.put("/conversations/:psid/block", async (req, res) => {
   }
 });
 
-// GET /admin/knowledge
-router.get("/knowledge", async (req, res) => {
+// GET /admin/knowledge/summary — org бүрийн KB item тоо
+router.get("/knowledge/summary", async (req, res) => {
   try {
     const prisma = getPrisma();
-    const items = await prisma.turuuKnowledge.findMany({ orderBy: { createdAt: "asc" } });
+    const grouped = await prisma.turuuKnowledge.groupBy({
+      by: ["orgId"],
+      _count: { id: true },
+    });
+    res.json(grouped);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /admin/knowledge — бүх KB items (orgId-аар filter хийх боломжтой)
+router.get("/knowledge", async (req, res) => {
+  try {
+    const { orgId } = req.query;
+    const prisma = getPrisma();
+    const where = orgId ? { orgId: String(orgId) } : {};
+    const items = await prisma.turuuKnowledge.findMany({ where, orderBy: { createdAt: "asc" } });
     res.json(items);
   } catch (e) {
     res.status(500).json({ error: e.message });
