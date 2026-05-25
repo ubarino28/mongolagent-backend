@@ -135,6 +135,22 @@ async function processMessage(psid, userText, orgId = null) {
 
   await saveHistory(psid, [...history, { role: "user", content: userText }, { role: "assistant", content: replyText }], orgId);
 
+  // Track message usage
+  if (orgId) {
+    try {
+      const prisma = getPrisma();
+      const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { quotaResetAt: true } });
+      const now = new Date();
+      const needsReset = !org?.quotaResetAt || now >= new Date(org.quotaResetAt);
+      if (needsReset) {
+        const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        await prisma.organization.update({ where: { id: orgId }, data: { messageUsed: 1, quotaResetAt: nextReset } });
+      } else {
+        await prisma.organization.update({ where: { id: orgId }, data: { messageUsed: { increment: 1 } } });
+      }
+    } catch { /* non-blocking */ }
+  }
+
   return replyText;
 }
 

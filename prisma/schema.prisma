@@ -8,20 +8,24 @@ datasource db {
 }
 
 model Organization {
-  id           String   @id @default(uuid())
-  name         String
-  slug         String   @unique
-  email        String   @unique
-  passwordHash String
-  fbPageId          String?  @unique
-  fbPageToken       String?
+  id                 String   @id @default(uuid())
+  name               String
+  slug               String   @unique
+  email              String   @unique
+  passwordHash       String
+  fbPageId           String?  @unique
+  fbPageToken        String?
   instagramAccountId String?
-  telegramBotToken  String?
-  telegramChatId    String?
-  plan         String   @default("starter")
-  status       String   @default("active")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  telegramBotToken   String?
+  telegramChatId     String?
+  plan               String   @default("starter")
+  status             String   @default("active")
+  messageUsed        Int      @default(0)
+  quotaResetAt       DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  orders TuruuOrder[]
 }
 
 model PasswordResetToken {
@@ -72,6 +76,23 @@ model TuruuConsultation {
   preferredTime   String?
   status          String   @default("PENDING")
   createdAt       DateTime @default(now())
+}
+
+model TuruuOrder {
+  id              String       @id @default(uuid())
+  orgId           String
+  org             Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  customerName    String?
+  customerPhone   String?
+  customerEmail   String?
+  deliveryAddress String?
+  items           Json?
+  totalAmount     Float?
+  status          String       @default("NEW")
+  notes           String?
+  psid            String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 }
 
 model TuruuSettings {
