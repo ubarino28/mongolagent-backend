@@ -326,6 +326,50 @@ router.put("/settings", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /client/chat
+router.post("/chat", async (req, res) => {
+  try {
+    const { message, history = [] } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: "message шаардлагатай" });
+
+    const orgId = req.org.orgId;
+    const { buildSystemPrompt } = require("../lib/prompt");
+    const OpenAI = require("openai");
+
+    const prisma = getPrisma();
+    let aiSettings = { model: "gpt-4o-mini", temperature: 0.4, max_tokens: 1024 };
+    try {
+      const rows = await prisma.turuuSettings.findMany({
+        where: { orgId, key: { in: ["ai_model", "ai_temperature", "ai_max_tokens"] } },
+      });
+      const s = {};
+      rows.forEach((r) => { s[r.key] = r.value; });
+      if (s.ai_model) aiSettings.model = s.ai_model;
+      if (s.ai_temperature) aiSettings.temperature = parseFloat(s.ai_temperature);
+      if (s.ai_max_tokens) aiSettings.max_tokens = parseInt(s.ai_max_tokens);
+    } catch {}
+
+    const systemPrompt = await buildSystemPrompt(false, orgId);
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const response = await openai.chat.completions.create({
+      model: aiSettings.model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...history.slice(-20),
+        { role: "user", content: message.trim() },
+      ],
+      temperature: aiSettings.temperature,
+      max_tokens: aiSettings.max_tokens,
+    });
+
+    const reply = response.choices[0].message.content?.trim() || "";
+    res.json({ reply });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /client/profile
 router.get("/profile", async (req, res) => {
   try {
