@@ -2,11 +2,19 @@
 const express = require("express");
 const axios = require("axios");
 const jwt = require("jsonwebtoken");
+const multer = require("multer");
+const { createClient } = require("@supabase/supabase-js");
 const { getPrisma } = require("../lib/db");
 const { clientAuthMiddleware } = require("../middleware/clientAuth");
 const { sendText } = require("../services/facebook.service");
 
 const router = express.Router();
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+function getSupabase() {
+  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+}
 
 const API_URL = process.env.API_URL || "https://turuuai-backend.onrender.com";
 const FRONTEND_URL = process.env.FRONTEND_APP_URL || "https://turuuai-app.vercel.app";
@@ -294,6 +302,36 @@ router.delete("/knowledge/:id", async (req, res) => {
     const item = await prisma.turuuKnowledge.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
     if (!item) return res.status(404).json({ error: "Not found" });
     await prisma.turuuKnowledge.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/upload — зураг Supabase Storage-д байршуулна
+router.post("/upload", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "file шаардлагатай" });
+    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    if (!allowed.includes(req.file.mimetype)) return res.status(400).json({ error: "Зөвхөн зураг (jpg, png, webp, gif) оруулна уу" });
+
+    const ext = req.file.originalname.split(".").pop().toLowerCase();
+    const filename = `${req.org.orgId}/${Date.now()}.${ext}`;
+    const supabase = getSupabase();
+
+    const { error } = await supabase.storage.from("turuuai-assets").upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+    if (error) return res.status(500).json({ error: error.message });
+
+    const { data } = supabase.storage.from("turuuai-assets").getPublicUrl(filename);
+    res.json({ url: data.publicUrl });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /client/profile/logo — компанийн лого шинэчилнэ
+router.put("/profile/logo", async (req, res) => {
+  try {
+    const { logoUrl } = req.body;
+    if (!logoUrl) return res.status(400).json({ error: "logoUrl шаардлагатай" });
+    const prisma = getPrisma();
+    await prisma.organization.update({ where: { id: req.org.orgId }, data: { logoUrl } });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -728,7 +766,7 @@ router.get("/profile", async (req, res) => {
     const prisma = getPrisma();
     const org = await prisma.organization.findUnique({
       where: { id: req.org.orgId },
-      select: { id: true, name: true, slug: true, email: true, plan: true, status: true, fbPageId: true, fbPageToken: true, telegramBotToken: true, telegramChatId: true, createdAt: true },
+      select: { id: true, name: true, slug: true, email: true, plan: true, status: true, logoUrl: true, fbPageId: true, fbPageToken: true, telegramBotToken: true, telegramChatId: true, createdAt: true },
     });
     res.json(org);
   } catch (e) { res.status(500).json({ error: e.message }); }
