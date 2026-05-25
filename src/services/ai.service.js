@@ -14,6 +14,54 @@ function getOpenAI() {
 const PLAN_QUOTA = { starter: 10000, growth: 15000, business: 15000, enterprise: 17000 };
 const PLAN_NEXT  = { starter: "Growth", growth: "Business", business: "Enterprise" };
 
+// Текстийг normalize хийх (тэмдэгт арилгах, жижиглэх)
+function normalizeText(s) {
+  return s.toLowerCase().trim().replace(/[?!。？！.,;:]/g, "").replace(/\s+/g, " ").trim();
+}
+
+// KB-с яг таарах хариулт хайна — таарвал OpenAI дуудахгүй
+async function findExactMatch(orgId, userText) {
+  if (!orgId || !userText || userText.length < 3) return null;
+  try {
+    const prisma = getPrisma();
+    const userNorm = normalizeText(userText);
+    if (userNorm.length < 3) return null;
+
+    const items = await prisma.turuuKnowledge.findMany({
+      where: { orgId, active: true },
+      select: { question: true, answer: true },
+    });
+
+    for (const item of items) {
+      const qNorm = normalizeText(item.question);
+      if (qNorm === userNorm) return item.answer;
+
+      // Нэг нь нөгөөгөө агуулж, урт нь 80%+ таарах бол
+      const longer = Math.max(qNorm.length, userNorm.length);
+      const shorter = Math.min(qNorm.length, userNorm.length);
+      if (shorter > 4 && shorter / longer > 0.8) {
+        if (qNorm.includes(userNorm) || userNorm.includes(qNorm)) return item.answer;
+      }
+    }
+  } catch { /* non-blocking */ }
+  return null;
+}
+
+// Message тоолох — cache hit болон normal дуудлага хоёуланд ашиглана
+async function incrementMessageUsed(orgId, prisma) {
+  try {
+    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { quotaResetAt: true } });
+    const now = new Date();
+    const needsReset = !org?.quotaResetAt || now >= new Date(org.quotaResetAt);
+    if (needsReset) {
+      const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      await prisma.organization.update({ where: { id: orgId }, data: { messageUsed: 1, quotaResetAt: nextReset } });
+    } else {
+      await prisma.organization.update({ where: { id: orgId }, data: { messageUsed: { increment: 1 } } });
+    }
+  } catch { /* non-blocking */ }
+}
+
 const TOOLS = [
   {
     type: "function",
@@ -140,6 +188,17 @@ async function processMessage(psid, userText, orgId = null) {
     if (chatRecord?.blocked) return null;
   } catch { /* proceed */ }
 
+  // KB exact match cache — таарвал OpenAI дуудахгүй, хямд бөгөөд хурдан
+  if (orgId) {
+    const cached = await findExactMatch(orgId, userText);
+    if (cached) {
+      const hist = await getHistory(psid, orgId);
+      await saveHistory(psid, [...hist, { role: "user", content: userText }, { role: "assistant", content: cached }], orgId);
+      await incrementMessageUsed(orgId, prisma);
+      return cached;
+    }
+  }
+
   const [isNew, history, aiSettings] = await Promise.all([
     isNewConversation(psid, orgId),
     getHistory(psid, orgId),
@@ -242,19 +301,7 @@ async function processMessage(psid, userText, orgId = null) {
   await saveHistory(psid, [...history, { role: "user", content: userText }, { role: "assistant", content: replyText }], orgId);
 
   // Мессежийн квот тоолох
-  if (orgId) {
-    try {
-      const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { quotaResetAt: true } });
-      const now = new Date();
-      const needsReset = !org?.quotaResetAt || now >= new Date(org.quotaResetAt);
-      if (needsReset) {
-        const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-        await prisma.organization.update({ where: { id: orgId }, data: { messageUsed: 1, quotaResetAt: nextReset } });
-      } else {
-        await prisma.organization.update({ where: { id: orgId }, data: { messageUsed: { increment: 1 } } });
-      }
-    } catch { /* non-blocking */ }
-  }
+  if (orgId) await incrementMessageUsed(orgId, prisma);
 
   return replyText;
 }
