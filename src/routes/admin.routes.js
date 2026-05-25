@@ -249,10 +249,10 @@ router.get("/knowledge", async (req, res) => {
 // POST /admin/knowledge
 router.post("/knowledge", async (req, res) => {
   try {
-    const { question, answer, category } = req.body;
+    const { question, answer, category, orgId } = req.body;
     if (!question || !answer) return res.status(400).json({ error: "question and answer required" });
     const prisma = getPrisma();
-    const item = await prisma.turuuKnowledge.create({ data: { question, answer, category } });
+    const item = await prisma.turuuKnowledge.create({ data: { question, answer, category, orgId: orgId || null } });
     res.json(item);
   } catch (e) {
     res.status(500).json({ error: e.message });
