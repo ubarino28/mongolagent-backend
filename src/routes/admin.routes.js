@@ -306,6 +306,230 @@ router.put("/settings", async (req, res) => {
   }
 });
 
+// GET /admin/organizations — бүх client байгууллагуудын жагсаалт
+router.get("/organizations", async (req, res) => {
+  try {
+    const { page = 1, plan, status, search } = req.query;
+    const take = 30;
+    const skip = (Number(page) - 1) * take;
+    const prisma = getPrisma();
+
+    const where = {};
+    if (plan) where.plan = plan;
+    if (status) where.status = status;
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: "insensitive" } },
+        { email: { contains: search, mode: "insensitive" } },
+        { slug: { contains: search, mode: "insensitive" } },
+      ];
+    }
+
+    const [orgs, total, planCounts] = await Promise.all([
+      prisma.organization.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take,
+        skip,
+        select: {
+          id: true, name: true, slug: true, email: true,
+          plan: true, status: true, messageUsed: true,
+          quotaResetAt: true, subscriptionEndsAt: true,
+          createdAt: true, updatedAt: true,
+          fbPageId: true, logoUrl: true,
+        },
+      }),
+      prisma.organization.count({ where }),
+      prisma.organization.groupBy({ by: ["plan"], _count: { id: true } }),
+    ]);
+
+    const planBreakdown = {};
+    planCounts.forEach(({ plan, _count }) => { planBreakdown[plan] = _count.id; });
+
+    res.json({ data: orgs, total, page: Number(page), pages: Math.ceil(total / take), planBreakdown });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /admin/organizations/:id — нэг client-ийн дэлгэрэнгүй мэдээлэл
+router.get("/organizations/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.params.id;
+
+    const [org, conversations, leads, consultations, orders, unanswered, settings] = await Promise.all([
+      prisma.organization.findUnique({
+        where: { id: orgId },
+        select: {
+          id: true, name: true, slug: true, email: true,
+          plan: true, status: true, messageUsed: true,
+          quotaResetAt: true, subscriptionEndsAt: true,
+          createdAt: true, updatedAt: true,
+          fbPageId: true, logoUrl: true,
+          telegramBotToken: true, telegramChatId: true,
+        },
+      }),
+      prisma.turuuChat.count({ where: { orgId } }),
+      prisma.turuuLead.count({ where: { orgId } }),
+      prisma.turuuConsultation.count({ where: { orgId } }),
+      prisma.turuuOrder.count({ where: { orgId } }),
+      prisma.turuuUnanswered.count({ where: { orgId, resolved: false } }),
+      prisma.turuuSettings.findMany({ where: { orgId } }),
+    ]);
+
+    if (!org) return res.status(404).json({ error: "Organization not found" });
+
+    const settingsMap = {};
+    settings.forEach((s) => { settingsMap[s.key] = s.value; });
+
+    const recentConvs = await prisma.turuuChat.findMany({
+      where: { orgId },
+      orderBy: { updatedAt: "desc" },
+      take: 5,
+      select: { psid: true, updatedAt: true, messages: true, blocked: true },
+    });
+
+    res.json({
+      org,
+      stats: { conversations, leads, consultations, orders, unansweredCount: unanswered },
+      settings: settingsMap,
+      recentConversations: recentConvs.map((c) => ({
+        psid: c.psid,
+        blocked: c.blocked,
+        updatedAt: c.updatedAt,
+        messageCount: Array.isArray(c.messages) ? c.messages.length : 0,
+        lastMessage: Array.isArray(c.messages) && c.messages.length > 0
+          ? c.messages[c.messages.length - 1] : null,
+      })),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /admin/organizations/:id — plan, status, subscriptionEndsAt шинэчлэх
+router.put("/organizations/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const { plan, status, subscriptionEndsAt } = req.body;
+    const data = {};
+    if (plan) data.plan = plan;
+    if (status) data.status = status;
+    if (subscriptionEndsAt !== undefined) data.subscriptionEndsAt = subscriptionEndsAt ? new Date(subscriptionEndsAt) : null;
+    const org = await prisma.organization.update({ where: { id: req.params.id }, data });
+    res.json(org);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /admin/unanswered — бүх org-ийн шийдэгдээгүй асуудлууд
+router.get("/unanswered", async (req, res) => {
+  try {
+    const { page = 1, resolved = "false", orgId } = req.query;
+    const take = 30;
+    const skip = (Number(page) - 1) * take;
+    const prisma = getPrisma();
+
+    const where = {};
+    if (resolved !== "all") where.resolved = resolved === "true";
+    if (orgId) where.orgId = orgId;
+
+    const [items, total] = await Promise.all([
+      prisma.turuuUnanswered.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take,
+        skip,
+      }),
+      prisma.turuuUnanswered.count({ where }),
+    ]);
+
+    // org нэрийг хавсаргах
+    const orgIds = [...new Set(items.map((i) => i.orgId).filter(Boolean))];
+    const orgs = await prisma.organization.findMany({
+      where: { id: { in: orgIds } },
+      select: { id: true, name: true, plan: true },
+    });
+    const orgMap = {};
+    orgs.forEach((o) => { orgMap[o.id] = o; });
+
+    const enriched = items.map((i) => ({ ...i, org: orgMap[i.orgId] || null }));
+    res.json({ data: enriched, total, page: Number(page), pages: Math.ceil(total / take) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /admin/unanswered/:id/resolve — шийдвэрлэх
+router.post("/unanswered/:id/resolve", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const item = await prisma.turuuUnanswered.findUnique({ where: { id: req.params.id } });
+    if (!item) return res.status(404).json({ error: "Not found" });
+
+    const { answer, category } = req.body;
+    if (answer) {
+      await prisma.turuuKnowledge.create({
+        data: { orgId: item.orgId, question: item.question, answer, category: category || null, active: true },
+      });
+    }
+    await prisma.turuuUnanswered.update({ where: { id: req.params.id }, data: { resolved: true } });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /admin/unanswered/:id
+router.delete("/unanswered/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    await prisma.turuuUnanswered.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /admin/health/detailed — system health check
+router.get("/health/detailed", async (req, res) => {
+  const result = { db: "ok", openai: "ok", timestamp: new Date().toISOString() };
+
+  try {
+    const prisma = getPrisma();
+    await prisma.$queryRaw`SELECT 1`;
+  } catch {
+    result.db = "error";
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    result.openai = "missing_key";
+  } else {
+    try {
+      const r = await fetch("https://api.openai.com/v1/models", {
+        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      result.openai = r.ok ? "ok" : "error";
+      if (r.ok) {
+        // usage endpoint (OpenAI dashboard API, separate from chat API)
+        result.openaiKeyConfigured = true;
+      }
+    } catch {
+      result.openai = "timeout";
+    }
+  }
+
+  result.supabase = process.env.SUPABASE_URL ? "configured" : "not_configured";
+  result.telegram = process.env.TELEGRAM_BOT_TOKEN ? "configured" : "not_configured";
+  result.facebook = process.env.FB_PAGE_ACCESS_TOKEN ? "configured" : "not_configured";
+  result.resend = process.env.RESEND_API_KEY ? "configured" : "not_configured";
+
+  res.json(result);
+});
+
 // GET /admin/users
 router.get("/users", async (req, res) => {
   try {
