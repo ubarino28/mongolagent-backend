@@ -45,17 +45,64 @@ function getDefaultBody() {
 — Нэг мессежид нэг л асуулт`;
 }
 
+function buildCoreTemplate({ company, aiName, contact, extraRules }) {
+  return `Чи ${company}-ийн AI туслах ${aiName} юм.
+Монгол хэлээр найрсаг, товч тодорхой хариулна.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+МЭНДЛЭХ ДҮРЭМ
+━━━━━━━━━━━━━━━━━━━━━━━━━
+— Шинэ яриа: "Сайн байна уу 😊" гэж мэндлэж хэрэглэгчийн мессежийн агуулгад ШУУД хариул
+— Хэрэглэгч шууд асуулт эсвэл захиалга бичвэл мэндлэж тэр даруй хариул
+— Давтан мэндлэхгүй
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ЗАХИАЛГЫН ПРОЦЕСС
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Хэрэглэгч захиалга өгөхийг хүсвэл дараах дарааллаар яв:
+1. Бүтээгдэхүүний жагсаалт болон үнийг харуулна
+2. Хэрэглэгч барааг сонгоход тоо ширхэгийг асуу
+3. Нийт дүнг тооцоолж харуул
+4. Хүргэлтийн хаяг, нэр, утас авна
+5. "Захиалга хүлээн авлаа, QPay төлбөрийн холбоос удахгүй илгээнэ 🧾" гэж мэдэгдэж save_order дуудна
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ХАРИУЛАХ ДҮРЭМ
+━━━━━━━━━━━━━━━━━━━━━━━━━
+— Мэдлэгийн санд байгаа мэдээлэлд ЗААВАЛ тулгуурла
+— Нэг мессежид нэг л асуулт
+— Товч, тодорхой — урт тайлбар бичихгүй
+— Мэдэхгүй бол: "Менежертэй холбогдъё — ${contact || "манай менежертэй холбогдоно уу"}" гэ
+— Үнийг нуухгүй, үргэлж хэлнэ${extraRules ? `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nНЭМЭЛТ ДҮРЭМ\n━━━━━━━━━━━━━━━━━━━━━━━━━\n${extraRules}` : ""}`;
+}
+
 async function buildSystemPrompt(isNew, orgId = null) {
-  let customBody = null;
+  let bodyPrompt = null;
   let knowledgeItems = [];
 
   try {
     const prisma = getPrisma();
-    const [customRow, knowledge] = await Promise.all([
-      prisma.turuuSettings.findFirst({ where: { orgId, key: "system_prompt" } }),
+    const [settings, knowledge] = await Promise.all([
+      prisma.turuuSettings.findMany({
+        where: { orgId, key: { in: ["system_prompt", "ai_company", "ai_name", "ai_contact", "ai_extra_rules"] } },
+      }),
       prisma.turuuKnowledge.findMany({ where: { orgId, active: true }, orderBy: { createdAt: "asc" } }),
     ]);
-    customBody = customRow?.value || null;
+
+    const s = {};
+    settings.forEach((r) => { s[r.key] = r.value; });
+
+    if (s.system_prompt) {
+      bodyPrompt = s.system_prompt;
+    } else if (s.ai_company) {
+      bodyPrompt = buildCoreTemplate({
+        company: s.ai_company,
+        aiName: s.ai_name || "AI туслах",
+        contact: s.ai_contact || "",
+        extraRules: s.ai_extra_rules || "",
+      });
+    }
+
     knowledgeItems = knowledge;
   } catch {
     // DB unavailable — use defaults
@@ -65,17 +112,17 @@ async function buildSystemPrompt(isNew, orgId = null) {
     ? `ШИНЭ ЯРИА: Товч мэндэл ("Сайн байна уу? 😊"), дараа нь хэрэглэгчийн мессежийн агуулгад ШУУД хариул.\nЗөвхөн цэвэр мэндлэл ("сайн уу", "hi") ирвэл "Танд юугаар туслах вэ?" гэж асуу.`
     : `ҮРГЭЛЖИЛЖ БУЙ ЯРИА: Яриагаа үргэлжлүүл. "Сайн байна уу?" давтахгүй.`;
 
-  const body = customBody || getDefaultBody();
+  const body = bodyPrompt || getDefaultBody();
 
-  let knowledge = "";
+  let knowledgeSection = "";
   if (knowledgeItems.length > 0) {
-    knowledge = "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nМЭДЛЭГИЙН САН\n━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+    knowledgeSection = "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nМЭДЛЭГИЙН САН\n━━━━━━━━━━━━━━━━━━━━━━━━━\n";
     knowledgeItems.forEach((k) => {
-      knowledge += `Асуулт: ${k.question}\nХариулт: ${k.answer}\n`;
+      knowledgeSection += `Асуулт: ${k.question}\nХариулт: ${k.answer}\n`;
     });
   }
 
-  return `${body}\n\n${newConvLine}${knowledge}`;
+  return `${body}\n\n${newConvLine}${knowledgeSection}`;
 }
 
-module.exports = { buildSystemPrompt };
+module.exports = { buildSystemPrompt, buildCoreTemplate };

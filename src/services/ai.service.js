@@ -2,7 +2,7 @@
 const OpenAI = require("openai");
 const { buildSystemPrompt } = require("../lib/prompt");
 const { getHistory, saveHistory, isNewConversation } = require("../lib/history");
-const { saveLead, saveConsultation } = require("./lead.service");
+const { saveLead, saveConsultation, saveOrder } = require("./lead.service");
 const { getPrisma } = require("../lib/db");
 
 let openai;
@@ -47,6 +47,37 @@ const TOOLS = [
           preferredTime:   { type: "string" },
         },
         required: ["phone"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "save_order",
+      description: "Хэрэглэгч захиалгаа баталгаажуулж нэр, утас, хүргэлтийн хаяг өгсний дараа дуудна. Захиалга DB-д хадгалж QPay холбоос илгээгдэх болно.",
+      parameters: {
+        type: "object",
+        properties: {
+          customerName:    { type: "string" },
+          customerPhone:   { type: "string" },
+          customerEmail:   { type: "string" },
+          deliveryAddress: { type: "string" },
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name:  { type: "string" },
+                qty:   { type: "number" },
+                price: { type: "number" },
+              },
+              required: ["name", "qty", "price"],
+            },
+          },
+          totalAmount: { type: "number" },
+          notes:       { type: "string" },
+        },
+        required: ["customerPhone", "items", "totalAmount"],
       },
     },
   },
@@ -114,6 +145,9 @@ async function processMessage(psid, userText, orgId = null) {
     } else if (toolCall.function.name === "save_consultation") {
       await saveConsultation({ psid, orgId, ...args });
       replyText = `Consultation захиалга амжилттай бүртгэгдлээ 😊 Бид тантай ${args.preferredTime ? args.preferredTime + " орчим" : "удахгүй"} холбогдоно.`;
+    } else if (toolCall.function.name === "save_order") {
+      await saveOrder({ psid, orgId, ...args });
+      replyText = `Захиалга амжилттай бүртгэгдлээ! 🎉 QPay төлбөрийн холбоос удахгүй илгээнэ. Баярлалаа 😊`;
     }
 
     const followUp = await getOpenAI().chat.completions.create({

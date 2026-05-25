@@ -311,23 +311,25 @@ router.post("/settings/builder", async (req, res) => {
 
     const BUILDER_SYSTEM = `Чи Монголын бизнес эздэд AI chatbot тохируулахад туслах мэргэжилтэн.
 
-Үүрэг: Бизнес эзэнтэй байгалийн яриа өрнүүлж тэдний бизнесийн мэдээллийг цуглуулан мэдлэгийн сан болон system prompt үүсгэнэ.
+Үүрэг: Бизнес эзэнтэй байгалийн яриа өрнүүлж дараах мэдээллийг цуглуулна:
+1. Компанийн нэр + AI-ийн нэр (өгөхгүй бол компани нэрийг ашиглана)
+2. Бүтээгдэхүүн/үйлчилгээ болон үнэ
+3. Хүргэлтийн нөхцөл, ажлын цаг
+4. Холбоо барих (утас эсвэл хаяг)
+5. Нэмэлт дүрэм (заавал биш)
 
-Цуглуулах мэдээлэл:
-- Бизнесийн нэр, төрөл
-- Бүтээгдэхүүн/үйлчилгээ болон үнэ
-- Хүргэлт, нөхцөл
-- Ажлын цаг, байршил
-- Холбоо барих
-- AI chatbot-оос юу хийлгэхийг хүсч байна
+ЧУХАЛ: Төлбөрийн хэлбэр АСУУХГҮЙ — систем QPay-аар автоматаар шийднэ.
+
+Мэдээлэл хангалттай болмогц зэрэг дуудна:
+- save_knowledge_items: бүтээгдэхүүн, үнэ, хүргэлт, FAQ-г Q&A хэлбэрт оруулж хадгална
+- save_business_info: компанийн нэр, AI нэр, холбоо барих, нэмэлт дүрэм хадгалж system prompt үүсгэнэ
 
 Дүрэм:
 - Монгол хэлээр найрсаг, товч ярина
-- Мэдээлэл ирэхэд save_knowledge_items дуудна
-- Хангалттай мэдээлэл цуглуулсны дараа update_system_prompt дуудна
+- Хангалттай мэдээлэл болсны дараа л tool дуудна
 - Хадгалсны дараа юу нэмэгдсэнийг мэдэгдэнэ
 - Нэмэлт мэдээлэл асуух
-- Мэдлэгийн санг дахин эхлүүлэхийг хүсвэл clear_knowledge дуудна`;
+- Дахин эхлүүлэхийг хүсвэл clear_knowledge дуудна`;
 
     const BUILDER_TOOLS = [
       {
@@ -358,14 +360,17 @@ router.post("/settings/builder", async (req, res) => {
       {
         type: "function",
         function: {
-          name: "update_system_prompt",
-          description: "AI chatbot-ын үндсэн system prompt шинэчилнэ",
+          name: "save_business_info",
+          description: "Компанийн үндсэн мэдээллийг хадгалж system prompt үүсгэнэ",
           parameters: {
             type: "object",
             properties: {
-              prompt: { type: "string" },
+              company:    { type: "string", description: "Компанийн нэр" },
+              aiName:     { type: "string", description: "AI-ийн нэр (жишээ: Аги, Туслах, Bot)" },
+              contact:    { type: "string", description: "Холбоо барих (утас эсвэл хаяг)" },
+              extraRules: { type: "string", description: "Нэмэлт зааварчилгаа (заавал биш)" },
             },
-            required: ["prompt"],
+            required: ["company"],
           },
         },
       },
@@ -417,12 +422,28 @@ router.post("/settings/builder", async (req, res) => {
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ saved: args.items.length }) });
         }
 
-        if (toolCall.function.name === "update_system_prompt") {
-          await prisma.turuuSettings.upsert({
-            where: { orgId_key: { orgId, key: "system_prompt" } },
-            create: { orgId, key: "system_prompt", value: args.prompt },
-            update: { value: args.prompt },
+        if (toolCall.function.name === "save_business_info") {
+          const { buildCoreTemplate } = require("../lib/prompt");
+          const generatedPrompt = buildCoreTemplate({
+            company:    args.company,
+            aiName:     args.aiName || args.company,
+            contact:    args.contact || "",
+            extraRules: args.extraRules || "",
           });
+          const upserts = [
+            { key: "ai_company",    value: args.company },
+            { key: "ai_name",       value: args.aiName || args.company },
+            { key: "ai_contact",    value: args.contact || "" },
+            { key: "ai_extra_rules",value: args.extraRules || "" },
+            { key: "system_prompt", value: generatedPrompt },
+          ];
+          for (const u of upserts) {
+            await prisma.turuuSettings.upsert({
+              where: { orgId_key: { orgId, key: u.key } },
+              create: { orgId, key: u.key, value: u.value },
+              update: { value: u.value },
+            });
+          }
           promptUpdated = true;
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true }) });
         }

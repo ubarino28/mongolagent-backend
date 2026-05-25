@@ -46,4 +46,16 @@ async function notifyTelegram(title, data, botToken, chatId) {
     .catch((err) => console.error("[TG] notify error:", err.message));
 }
 
-module.exports = { saveLead, saveConsultation };
+async function saveOrder({ psid, orgId = null, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes }) {
+  const prisma = getPrisma();
+  const order = await prisma.turuuOrder.create({
+    data: { psid, orgId, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes },
+  });
+
+  const { botToken, chatId } = await getTelegramConfig(orgId);
+  const itemsSummary = Array.isArray(items) ? items.map((i) => `${i.name} x${i.qty} — ₮${(i.price * i.qty).toLocaleString()}`).join("\n") : "";
+  await notifyTelegram("🛒 Шинэ захиалга", { customerName, customerPhone, deliveryAddress, items: itemsSummary, totalAmount: `₮${totalAmount?.toLocaleString()}`, notes }, botToken, chatId);
+  return order;
+}
+
+module.exports = { saveLead, saveConsultation, saveOrder };
