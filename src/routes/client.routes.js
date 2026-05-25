@@ -347,66 +347,96 @@ router.post("/settings/builder", async (req, res) => {
     const OpenAI = require("openai");
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-    const BUILDER_SYSTEM = `Чи Монголын бизнес эздэд AI chatbot тохируулахад туслах мэргэжилтэн "Туслах" юм.
-Найрсаг, хурдан, мэргэжлийн — клиентийн цагийг хэмнэнэ.
+    const BUILDER_SYSTEM = `Чи Монголын бизнес эздэд AI chatbot тохируулахад туслах мэргэжилтэн.
+Зорилго: бизнесийн бүрэн дүр төрхийг ойлгож, НАРИЙН, ХУВИЙН AI persona үүсгэх.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-ЭХЛЭХ
+ЭХЛЭХ (__INIT__)
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-"__INIT__" мессеж ирвэл яг ийм хариул:
-"Сайн байна уу! 😊 Би таны AI chatbot-ыг тохируулахад туслах болно.
+Яг ийм хариул:
+"Сайн байна уу! 😊 Би таны AI chatbot-ыг мэргэжлийн түвшинд тохируулахад туслах болно.
 
-Дараах мэдээллийг цуглуулна:
-1️⃣ Компанийн нэр
-2️⃣ Бүтээгдэхүүн / үйлчилгээ болон үнэ
-3️⃣ Холбоо барих (утас эсвэл хаяг)
-4️⃣ Хүргэлт, ажлын цаг (байвал)
+5 үе шаттайгаар мэдээлэл цуглуулна:
+1️⃣ Компанийн онцлог, зорилтот үйлчлүүлэгч
+2️⃣ Бүтээгдэхүүн/үйлчилгээний дэлгэрэнгүй
+3️⃣ Үйлчилгээний процесс, цаг хуваарь
+4️⃣ AI-ийн зан чанар, харилцааны хэв маяг
+5️⃣ Амжилтын жишээ (заавал биш)
 
-**Компанийнхаа нэрийг хэлнэ үү?**"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-МЭДЭЭЛЭЛ ЦУГЛУУЛАХ ДҮРЭМ
-━━━━━━━━━━━━━━━━━━━━━━━━━
-— Клиент нэг мессежид хэдэн ч мэдээлэл өгч болно — бүгдийг нэгэн зэрэг хүлээн ав
-— Хариулт авсан зүйлийг ДАВТАН АСУУХГҮЙ
-— Дараагийн дутуу мэдээллийг нэг асуултаар нэмж авна
-— Хангалттай мэдээлэл цугласан бол (компани нэр + хамгийн багадаа 1 бүтээгдэхүүн/үйлчилгээ) tool дуудна
-— Төлбөрийн хэлбэр АСУУХГҮЙ — систем QPay-аар шийднэ
+**Эхлэхийн тулд:** Компанийнхаа нэр болон юу хийдгийг товч хэлнэ үү?"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-МЭДЭХГҮЙ ТОХИОЛДОЛД
+ҮЕ ШАТ 1 — КОМПАНИЙН ДНА
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-Клиент хүргэлт, ажлын цаг, нэмэлт нөхцөлийг МЭДЭХГҮЙ эсвэл байхгүй гэвэл — тийм зүйл байхгүй гэж ойлгоод ХОЙШ ТАВЬж дараагийн асуулт руу шилж.
+Мэдэж авах (1-2 асуулт):
+— Компанийн нэр, юу хийдэг, хэзээ үүссэн
+— Голлох хэрэглэгч: нас, хэрэгцээ, байршил
+— Өрсөлдөгчдөөс юугаараа ялгардаг
+
+Асуух жишээ: "Танай гол хэрэглэгчид хэн бэ — нас, хэрэгцээ? Бусдаас юугаараа ялгардаг вэ?"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ҮЕ ШАТ 2 — БҮТЭЭГДЭХҮҮН/ҮЙЛЧИЛГЭЭ
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Мэдэж авах:
+— Нэр, үнэ, хэнд зориулагдсан
+— Гол 2-3 онцлог, давуу тал
+— Хэрэглэгчид хамгийн ихэвчлэн тавьдаг 3-5 асуулт
+— Яагаад авахаас татгалздаг → та тэд рүү юу хэлдэг?
+
+Асуух жишээ:
+"Хамгийн их зарагддаг бүтээгдэхүүнээсээ эхлэе. Нэр, үнэ, хэнд зориулагдсан болохыг хэлнэ үү?"
+"Хэрэглэгч 'үнэтэй байна', 'бодоод үзье' гэвэл та ямар хариулт өгдөг вэ?"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ҮЕ ШАТ 3 — ПРОЦЕСС
+━━━━━━━━━━━━━━━━━━━━━━━━━
+— Захиалгаас хүргэлт хүртэл хугацаа, процесс
+— Буцаалт, гомдолд хандах байдал
+— Ажлын цаг, байршил, хүргэлтийн нөхцөл
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ҮЕ ШАТ 4 — ЗАН ЧАНАР
+━━━━━━━━━━━━━━━━━━━━━━━━━
+— "Та" эсвэл "чи" хэлэх
+— Emoji ашиглах уу
+— Хориглох сэдэв, forbidden topics
+— Нэмэлт онцгой дүрэм (жишээ: "хямдрал өгөхгүй", "зөвхөн UB хүргэнэ")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ҮЕ ШАТ 5 — ҮР ДҮН (заавал биш)
+━━━━━━━━━━━━━━━━━━━━━━━━━
+— "Манай нэг клиент..." хэлбэрт амжилтын жишээ
+— Тоон үр дүн, гэрчлэл
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+МЭДЭЭЛЭЛ ЦУГЛУУЛАХ ЗАРЧИМ
+━━━━━━━━━━━━━━━━━━━━━━━━━
+— Клиент нэгэн зэрэг олон зүйл өгч болно — бүгдийг хүлээн ав
+— Авсан зүйлийг ДАВТАН АСУУХГҮЙ
+— Байхгүй/мэдэхгүй зүйлийг шаардахгүй — алгасна
+— Min шаардлага: Үе шат 1 + Үе шат 2 дуусвал tool дуудаж болно
+— Төлбөрийн хэлбэр АСУУХГҮЙ
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 TOOL ДУУДАХ
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-Хангалттай мэдээлэл цугласан бол ЗЭРЭГ дуудна:
+Мэдээлэл хангалттай болмогц ЗЭРЭГ дуудна:
+→ save_knowledge_items: Q&A хэлбэрт, category-тай
+→ save_business_profile: бүх профайл (narrative prompt үүснэ)
 
-→ save_knowledge_items: бүх бүтээгдэхүүн/үйлчилгээ, хүргэлт, FAQ-г Q&A хэлбэрт хувиргаж хадгална.
-  Категори жишээ: "Бүтээгдэхүүн", "Үйлчилгээ", "Хүргэлт", "Цаг хуваарь", "Ерөнхий"
-
-→ save_business_info: компани нэр, AI нэр, холбоо барих, нэмэлт дүрэм хадгална.
-  AI нэр: клиент өгөөгүй бол компани нэрнээс үүсгэ (жишээ: "Номин" → "Номин туслах", "Gogo" → "Гоги")
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-НЭМЭЛТ ДҮРЭМ (extraRules) ТАЛААР
-━━━━━━━━━━━━━━━━━━━━━━━━━
-Клиентээс "Нэмэлт зааварчилгаа байна уу?" гэж асуухдаа жишээ өг:
-"Жишээ нь: 'Хямдрал өгөхгүй', 'Зөвхөн Улаанбаатарт хүргэнэ', 'Насанд хүрэгчдэд зориулсан' гэх мэт"
-Хэрэв байхгүй гэвэл — орхино.
+AI нэр: өгөөгүй бол компани нэрнээс үүсгэ ("Номин" → "Номин туслах")
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 ДУУСГАХ
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-Tool хадгалсны дараа:
-"✅ Бэлэн боллоо! Таны AI chatbot тохируулагдлаа.
+Хадгалсны дараа яг ийм хариул:
+"✅ Таны AI chatbot бэлэн боллоо!
 
-🤖 AI нэр: [aiName]
-🏢 Компани: [company]
-📚 Мэдлэгийн сан: [тоо] зүйл
+🤖 [aiName] — [company]-ийн AI зөвлөх
+📚 Мэдлэгийн санд [тоо] зүйл нэмэгдлээ
 
-'AI Чат' хэсэгт орж туршиж үзнэ үү — таны chatbot яг ийм байдлаар клиентүүдтэй харилцана."
+'AI Чат' хэсэгт орж туршиж үзнэ үү 🚀"
 
 Дахин эхлүүлэхийг хүсвэл clear_knowledge дуудна.`;
 
@@ -415,7 +445,7 @@ Tool хадгалсны дараа:
         type: "function",
         function: {
           name: "save_knowledge_items",
-          description: "Бизнесийн мэдээллээс Q&A цуглуулж мэдлэгийн санд хадгална",
+          description: "Q&A хэлбэрт мэдлэгийн санд хадгална. Category заавал оруулна.",
           parameters: {
             type: "object",
             properties: {
@@ -425,10 +455,10 @@ Tool хадгалсны дараа:
                   type: "object",
                   properties: {
                     question: { type: "string" },
-                    answer: { type: "string" },
-                    category: { type: "string" },
+                    answer:   { type: "string" },
+                    category: { type: "string", description: "Жишээ: Бүтээгдэхүүн, Үнэ, Хүргэлт, Процесс, FAQ" },
                   },
-                  required: ["question", "answer"],
+                  required: ["question", "answer", "category"],
                 },
               },
             },
@@ -439,15 +469,46 @@ Tool хадгалсны дараа:
       {
         type: "function",
         function: {
-          name: "save_business_info",
-          description: "Компанийн үндсэн мэдээллийг хадгалж system prompt үүсгэнэ",
+          name: "save_business_profile",
+          description: "Бизнесийн бүрэн профайлыг хадгалж narrative AI persona үүсгэнэ",
           parameters: {
             type: "object",
             properties: {
-              company:    { type: "string", description: "Компанийн нэр" },
-              aiName:     { type: "string", description: "AI-ийн нэр (жишээ: Аги, Туслах, Bot)" },
-              contact:    { type: "string", description: "Холбоо барих (утас эсвэл хаяг)" },
-              extraRules: { type: "string", description: "Нэмэлт зааварчилгаа (заавал биш)" },
+              company:        { type: "string" },
+              aiName:         { type: "string", description: "Өгөөгүй бол компани нэрнээс үүсгэ" },
+              contact:        { type: "string" },
+              description:    { type: "string", description: "Компанийн тайлбар, түүх, зорилго" },
+              targetCustomers:{ type: "string", description: "Голлох хэрэглэгч: нас, хэрэгцээ" },
+              differentiators:{ type: "string", description: "Өрсөлдөгчдөөс ялгарах давуу тал" },
+              productDetails: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    name:              { type: "string" },
+                    price:             { type: "string" },
+                    targetUser:        { type: "string" },
+                    features:          { type: "string" },
+                    objection:         { type: "string" },
+                    objectionResponse: { type: "string" },
+                  },
+                  required: ["name"],
+                },
+              },
+              orderProcess:   { type: "string" },
+              returnPolicy:   { type: "string" },
+              workingHours:   { type: "string" },
+              tone: {
+                type: "object",
+                properties: {
+                  taOrChi:  { type: "string", enum: ["та", "чи"] },
+                  useEmoji: { type: "boolean" },
+                  style:    { type: "string" },
+                },
+              },
+              caseStudy:      { type: "string" },
+              forbiddenTopics:{ type: "string" },
+              extraRules:     { type: "string" },
             },
             required: ["company"],
           },
@@ -501,22 +562,17 @@ Tool хадгалсны дараа:
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ saved: args.items.length }) });
         }
 
-        if (toolCall.function.name === "save_business_info") {
-          const { buildCoreTemplate } = require("../lib/prompt");
-          // AI нэр: өгөөгүй бол компани нэрнээс автоматаар үүсгэ
+        if (toolCall.function.name === "save_business_profile") {
+          const { buildNarrativePrompt } = require("../lib/prompt");
           const autoAiName = args.aiName || (args.company ? `${args.company} туслах` : "AI туслах");
-          const generatedPrompt = buildCoreTemplate({
-            company:    args.company,
-            aiName:     autoAiName,
-            contact:    args.contact || "",
-            extraRules: args.extraRules || "",
-          });
+          const profile = { ...args, aiName: autoAiName };
+          const narrativePrompt = buildNarrativePrompt(profile);
           const upserts = [
             { key: "ai_company",    value: args.company },
             { key: "ai_name",       value: autoAiName },
             { key: "ai_contact",    value: args.contact || "" },
-            { key: "ai_extra_rules",value: args.extraRules || "" },
-            { key: "system_prompt", value: generatedPrompt },
+            { key: "ai_profile",    value: JSON.stringify(profile) },
+            { key: "system_prompt", value: narrativePrompt },
           ];
           for (const u of upserts) {
             await prisma.turuuSettings.upsert({
@@ -526,7 +582,7 @@ Tool хадгалсны дараа:
             });
           }
           promptUpdated = true;
-          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true }) });
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, aiName: autoAiName, company: args.company }) });
         }
 
         if (toolCall.function.name === "clear_knowledge") {
@@ -838,6 +894,144 @@ router.put("/profile/telegram", async (req, res) => {
     await prisma.organization.update({
       where: { id: req.org.orgId },
       data: { telegramBotToken: telegramBotToken || null, telegramChatId: telegramChatId || null },
+    });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── UNANSWERED QUESTIONS ─────────────────────────────────────────────────────
+
+// GET /client/unanswered
+router.get("/unanswered", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const { resolved } = req.query;
+    const where = { orgId: req.org.orgId };
+    if (resolved === "true") where.resolved = true;
+    else where.resolved = false;
+    const items = await prisma.turuuUnanswered.findMany({ where, orderBy: { createdAt: "desc" }, take: 100 });
+    res.json(items);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/unanswered/:id/resolve — KB-д нэм + resolved болго
+router.post("/unanswered/:id/resolve", async (req, res) => {
+  try {
+    const { answer, category } = req.body;
+    if (!answer?.trim()) return res.status(400).json({ error: "answer шаардлагатай" });
+    const prisma = getPrisma();
+    const item = await prisma.turuuUnanswered.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!item) return res.status(404).json({ error: "Not found" });
+    await Promise.all([
+      prisma.turuuKnowledge.create({
+        data: { orgId: req.org.orgId, question: item.question, answer: answer.trim(), category: category || "FAQ" },
+      }),
+      prisma.turuuUnanswered.update({ where: { id: req.params.id }, data: { resolved: true } }),
+    ]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /client/unanswered/:id — dismiss
+router.delete("/unanswered/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const item = await prisma.turuuUnanswered.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!item) return res.status(404).json({ error: "Not found" });
+    await prisma.turuuUnanswered.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── PDF IMPORT ───────────────────────────────────────────────────────────────
+
+const pdfUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+// POST /client/upload/pdf — PDF-аас Q&A автоматаар гаргаж KB-д нэмнэ
+router.post("/upload/pdf", pdfUpload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "file шаардлагатай" });
+    if (req.file.mimetype !== "application/pdf") return res.status(400).json({ error: "Зөвхөн PDF файл оруулна уу" });
+
+    const pdfParse = require("pdf-parse");
+    const parsed = await pdfParse(req.file.buffer);
+    const text = parsed.text?.slice(0, 12000) || "";
+    if (!text.trim()) return res.status(400).json({ error: "PDF-аас текст гарсангүй" });
+
+    const OpenAI = require("openai");
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const aiRes = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `Та дараах бичвэрийг уншаад бизнесийн мэдлэгийн санд тохирох Q&A хосуудыг гаргана уу.
+JSON массив хэлбэрт буцаана: [{"question":"...","answer":"...","category":"..."}]
+Category: Бүтээгдэхүүн | Үнэ | Хүргэлт | Процесс | Компани | FAQ
+Хамгийн багадаа 5, хамгийн ихдээ 30 Q&A гарга.
+Зөвхөн JSON буцаа — тайлбар нэмэхгүй.`,
+        },
+        { role: "user", content: text },
+      ],
+      temperature: 0.2,
+      max_tokens: 2048,
+    });
+
+    let items = [];
+    try {
+      const content = aiRes.choices[0].message.content?.trim() || "[]";
+      const cleaned = content.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+      items = JSON.parse(cleaned);
+    } catch { return res.status(500).json({ error: "AI хариулт задлахад алдаа гарлаа" }); }
+
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    for (const item of items) {
+      if (item.question && item.answer) {
+        await prisma.turuuKnowledge.create({
+          data: { orgId, question: item.question, answer: item.answer, category: item.category || "FAQ" },
+        });
+      }
+    }
+    res.json({ ok: true, count: items.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── FUNNEL ANALYTICS ────────────────────────────────────────────────────────
+
+// GET /client/analytics/funnel
+router.get("/analytics/funnel", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const [conversations, leads, consultations, orders] = await Promise.all([
+      prisma.turuuChat.count({ where: { orgId } }),
+      prisma.turuuLead.count({ where: { orgId } }),
+      prisma.turuuConsultation.count({ where: { orgId } }),
+      prisma.turuuOrder.count({ where: { orgId } }),
+    ]);
+    const unanswered = await prisma.turuuUnanswered.count({ where: { orgId, resolved: false } });
+    res.json({
+      conversations,
+      leads,
+      consultations,
+      orders,
+      unanswered,
+      convRate: conversations > 0 ? Math.round((leads / conversations) * 100) : 0,
+      closeRate: leads > 0 ? Math.round((orders / leads) * 100) : 0,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── HANDOFF ─────────────────────────────────────────────────────────────────
+
+// POST /client/conversations/:psid/handoff-clear
+router.post("/conversations/:psid/handoff-clear", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    await prisma.turuuChat.updateMany({
+      where: { psid: req.params.psid, orgId: req.org.orgId },
+      data: { handoffRequested: false },
     });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }

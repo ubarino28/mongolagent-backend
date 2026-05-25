@@ -11,6 +11,9 @@ function getOpenAI() {
   return openai;
 }
 
+const PLAN_QUOTA = { starter: 10000, growth: 15000, business: 15000, enterprise: 17000 };
+const PLAN_NEXT  = { starter: "Growth", growth: "Business", business: "Enterprise" };
+
 const TOOLS = [
   {
     type: "function",
@@ -54,7 +57,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "save_order",
-      description: "Хэрэглэгч захиалгаа баталгаажуулж нэр, утас, хүргэлтийн хаяг өгсний дараа дуудна. Захиалга DB-д хадгалж QPay холбоос илгээгдэх болно.",
+      description: "Хэрэглэгч захиалгаа баталгаажуулж нэр, утас, хаяг өгсний дараа дуудна.",
       parameters: {
         type: "object",
         properties: {
@@ -81,6 +84,33 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "flag_unanswered",
+      description: "Хэрэглэгчийн асуултад мэдлэгийн санд хариулт байхгүй бол энэ tool-ийг ЭХЛЭЭД дуудна, дараа нь contact fallback хариулт өг.",
+      parameters: {
+        type: "object",
+        properties: {
+          question: { type: "string", description: "Хариулагдаагүй хэрэглэгчийн асуулт" },
+        },
+        required: ["question"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "request_handoff",
+      description: "Хэрэглэгч хүнтэй ярихыг хүсвэл эсвэл AI шийдэж чадахгүй нөхцөл үүсвэл дуудна.",
+      parameters: {
+        type: "object",
+        properties: {
+          reason: { type: "string", description: "Handoff хүссэн шалтгаан" },
+        },
+      },
+    },
+  },
 ];
 
 async function loadAISettings(orgId = null) {
@@ -92,9 +122,9 @@ async function loadAISettings(orgId = null) {
     const s = {};
     rows.forEach((r) => { s[r.key] = r.value; });
     return {
-      model: s.ai_model || "gpt-4o-mini",
-      temperature: parseFloat(s.ai_temperature || "0.4"),
-      max_tokens: parseInt(s.ai_max_tokens || "1024"),
+      model:       s.ai_model       || "gpt-4o-mini",
+      temperature: parseFloat(s.ai_temperature  || "0.4"),
+      max_tokens:  parseInt(s.ai_max_tokens || "1024"),
     };
   } catch {
     return { model: "gpt-4o-mini", temperature: 0.4, max_tokens: 1024 };
@@ -102,9 +132,10 @@ async function loadAISettings(orgId = null) {
 }
 
 async function processMessage(psid, userText, orgId = null) {
-  // Check if blocked
+  const prisma = getPrisma();
+
+  // Block шалгах
   try {
-    const prisma = getPrisma();
     const chatRecord = await prisma.turuuChat.findFirst({ where: { psid, orgId } });
     if (chatRecord?.blocked) return null;
   } catch { /* proceed */ }
@@ -115,7 +146,23 @@ async function processMessage(psid, userText, orgId = null) {
     loadAISettings(orgId),
   ]);
 
-  const systemPrompt = await buildSystemPrompt(isNew, orgId);
+  let systemPrompt = await buildSystemPrompt(isNew, orgId);
+
+  // Upsell hint — квот 80%+ бол нэмэх
+  if (orgId) {
+    try {
+      const org = await prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { plan: true, messageUsed: true },
+      });
+      const quota = PLAN_QUOTA[org.plan] || 10000;
+      const pct = Math.round(((org.messageUsed || 0) / quota) * 100);
+      const nextPlan = PLAN_NEXT[org.plan];
+      if (pct >= 80 && nextPlan) {
+        systemPrompt += `\n\n[ДОТООД: Энэ org-ийн мессежийн эрх ${pct}% дүүрсэн. Байгалийн яриа дотор боломжтой үед ${nextPlan} план руу upgrade хийхийг зөөлнөөр санал болго.]`;
+      }
+    } catch { /* non-blocking */ }
+  }
 
   const messages = [
     { role: "system", content: systemPrompt },
@@ -124,44 +171,69 @@ async function processMessage(psid, userText, orgId = null) {
   ];
 
   const response = await getOpenAI().chat.completions.create({
-    model: aiSettings.model,
+    model:       aiSettings.model,
     messages,
-    tools: TOOLS,
+    tools:       TOOLS,
     tool_choice: "auto",
     temperature: aiSettings.temperature,
-    max_tokens: aiSettings.max_tokens,
+    max_tokens:  aiSettings.max_tokens,
   });
 
   const choice = response.choices[0];
   let replyText = "";
 
   if (choice.finish_reason === "tool_calls") {
-    const toolCall = choice.message.tool_calls[0];
-    const args = JSON.parse(toolCall.function.arguments);
+    const toolCalls = choice.message.tool_calls;
+    const toolResults = [];
 
-    if (toolCall.function.name === "save_lead") {
-      await saveLead({ psid, orgId, ...args });
-      replyText = `Баярлалаа 😊 Таны мэдээллийг хүлээн авлаа. Манай мэргэжилтэн удахгүй тантай холбогдоно.`;
-    } else if (toolCall.function.name === "save_consultation") {
-      await saveConsultation({ psid, orgId, ...args });
-      replyText = `Consultation захиалга амжилттай бүртгэгдлээ 😊 Бид тантай ${args.preferredTime ? args.preferredTime + " орчим" : "удахгүй"} холбогдоно.`;
-    } else if (toolCall.function.name === "save_order") {
-      await saveOrder({ psid, orgId, ...args });
-      replyText = `Захиалга амжилттай бүртгэгдлээ! 🎉 QPay төлбөрийн холбоос удахгүй илгээнэ. Баярлалаа 😊`;
+    for (const toolCall of toolCalls) {
+      const args = JSON.parse(toolCall.function.arguments);
+
+      if (toolCall.function.name === "save_lead") {
+        await saveLead({ psid, orgId, ...args });
+        toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) });
+
+      } else if (toolCall.function.name === "save_consultation") {
+        await saveConsultation({ psid, orgId, ...args });
+        toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) });
+
+      } else if (toolCall.function.name === "save_order") {
+        await saveOrder({ psid, orgId, ...args });
+        toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) });
+
+      } else if (toolCall.function.name === "flag_unanswered") {
+        // Хариулагдаагүй асуултыг DB-д хадгала
+        try {
+          await prisma.turuuUnanswered.create({
+            data: { orgId: orgId || "default", question: args.question, psid },
+          });
+        } catch { /* non-blocking */ }
+        toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ flagged: true }) });
+
+      } else if (toolCall.function.name === "request_handoff") {
+        // Handoff flag TuruuChat-т тэмдэглэ
+        try {
+          await prisma.turuuChat.updateMany({
+            where: { psid, orgId },
+            data: { handoffRequested: true },
+          });
+        } catch { /* non-blocking */ }
+        toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ handoff: true }) });
+      }
     }
 
+    // Follow-up: tool үр дүнтэй дахин дуудна
     const followUp = await getOpenAI().chat.completions.create({
       model: aiSettings.model,
       messages: [
         ...messages,
         choice.message,
-        { role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) },
+        ...toolResults.map((r) => ({ role: "tool", tool_call_id: r.tool_call_id, content: r.content })),
       ],
       temperature: aiSettings.temperature,
-      max_tokens: 512,
+      max_tokens:  512,
     });
-    const followText = followUp.choices[0].message.content?.trim();
-    if (followText && followText.length > 5) replyText = followText;
+    replyText = followUp.choices[0].message.content?.trim() || "";
 
   } else {
     replyText = choice.message.content?.trim() || "";
@@ -169,10 +241,9 @@ async function processMessage(psid, userText, orgId = null) {
 
   await saveHistory(psid, [...history, { role: "user", content: userText }, { role: "assistant", content: replyText }], orgId);
 
-  // Track message usage
+  // Мессежийн квот тоолох
   if (orgId) {
     try {
-      const prisma = getPrisma();
       const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { quotaResetAt: true } });
       const now = new Date();
       const needsReset = !org?.quotaResetAt || now >= new Date(org.quotaResetAt);

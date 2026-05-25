@@ -39,15 +39,25 @@ model PasswordResetToken {
 }
 
 model TuruuChat {
-  id        String   @id @default(uuid())
-  psid      String
-  orgId     String?
-  messages  Json     @default("[]")
-  blocked   Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id               String   @id @default(uuid())
+  psid             String
+  orgId            String?
+  messages         Json     @default("[]")
+  blocked          Boolean  @default(false)
+  handoffRequested Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   @@unique([orgId, psid])
+}
+
+model TuruuUnanswered {
+  id        String   @id @default(uuid())
+  orgId     String
+  question  String
+  psid      String?
+  resolved  Boolean  @default(false)
+  createdAt DateTime @default(now())
 }
 
 model TuruuLead {
