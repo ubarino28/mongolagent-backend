@@ -11,7 +11,7 @@ function getOpenAI() {
   return openai;
 }
 
-const PLAN_QUOTA = { starter: 10000, growth: 15000, business: 15000, enterprise: 17000 };
+const PLAN_QUOTA = { starter: 7000, growth: 15000, business: 30000, enterprise: 70000 };
 const PLAN_NEXT  = { starter: "Growth", growth: "Business", business: "Enterprise" };
 
 // Текстийг normalize хийх (тэмдэгт арилгах, жижиглэх)

@@ -730,7 +730,7 @@ router.put("/settings", async (req, res) => {
 
 // ─── QUOTA ───────────────────────────────────────────────────────────────────
 
-const PLAN_QUOTA = { starter: 10000, business: 15000, growth: 15000, enterprise: 17000 };
+const PLAN_QUOTA = { starter: 7000, growth: 15000, business: 30000, enterprise: 70000 };
 
 // GET /client/quota
 router.get("/quota", async (req, res) => {
@@ -871,9 +871,10 @@ router.get("/billing", async (req, res) => {
     });
     const quota = PLAN_QUOTA[org.plan] || 10000;
     const PLANS = {
-      starter:    { name: "Starter",    price: 79900,  quota: 10000, features: ["10,000 мессеж/сар", "AI Chatbot", "Мэдлэгийн сан", "Тайлан"] },
-      growth:     { name: "Growth",     price: 149900, quota: 15000, features: ["15,000 мессеж/сар", "QPay төлбөр", "Цаг захиалга", "Telegram мэдэгдэл"] },
-      enterprise: { name: "Enterprise", price: 399000, quota: 17000, features: ["17,000 мессеж/сар", "Website хөгжүүлэлт", "Custom AI", "SLA баталгаа"] },
+      starter:    { name: "Starter",    price: 79900,  quota: 7000,  features: ["7,000 мессеж/сар", "Facebook Messenger AI", "Builder AI", "Мэдлэгийн сан (30)", "Lead цуглуулах", "Telegram мэдэгдэл"] },
+      growth:     { name: "Growth",     price: 149900, quota: 15000, features: ["15,000 мессеж/сар", "Захиалга + QPay", "Consultation захиалга", "+1 → DM автоматжуулалт", "PDF → KB", "Funnel analytics"] },
+      business:   { name: "Business",   price: 249900, quota: 30000, features: ["30,000 мессеж/сар", "Instagram канал", "Custom keyword → DM", "Хүний handoff", "AI тохиргоо", "Telegram дэмжлэг"] },
+      enterprise: { name: "Enterprise", price: 499900, quota: 70000, features: ["70,000 мессеж/сар", "Custom AI Chatbot", "Custom AI Agent", "Custom Website", "White label", "Олон хуудас + API"] },
     };
     res.json({ ...org, quota, messageUsed: org.messageUsed || 0, plans: PLANS, currentPlan: PLANS[org.plan] });
   } catch (e) { res.status(500).json({ error: e.message }); }
