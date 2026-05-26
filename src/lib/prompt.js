@@ -59,9 +59,8 @@ TOOL ДУУДАХ ДАРААЛАЛ
 function buildNarrativePrompt(profile) {
   const {
     company, aiName, contact,
-    description, targetCustomers, differentiators,
-    productDetails, orderProcess, returnPolicy, workingHours,
-    tone, caseStudy, forbiddenTopics, extraRules,
+    productDetails,
+    tone, forbiddenTopics, extraRules,
   } = profile;
 
   const taChi = tone?.taOrChi || "та";
@@ -76,39 +75,11 @@ function buildNarrativePrompt(profile) {
 ${chi ? "Хэрэглэгчтэй 'чи' хэлж харилц — дотно, найрсаг." : "Хэрэглэгчтэй 'та' хэлж харилц — мэргэжлийн, найрсаг."}
 ${emojiOk ? "Emoji хэрэглэж болно 😊" : "Emoji ашиглахгүй — ёсчлол хэв маяг баримтал."}
 Онцлог: шийдвэр гаргахад тусладаг, тодорхой, итгэлтэй.
-Хэрэглэгч ойлгохгүй байвал өөр үгээр тайлбарлана.`;
+Хэрэглэгч ойлгохгүй байвал өөр үгээр тайлбарлана.
+Бүтээгдэхүүн, үнэ, ажлын цаг болон компанийн мэдээлэл бүгд search_knowledge-д байна — заавал дуудаж шалга.`;
 
-  // ── 2. КОМПАНИ ───────────────────────────────────────────────────────────────
-  if (description || targetCustomers || differentiators) {
-    p += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nКОМПАНИ\n━━━━━━━━━━━━━━━━━━━━━━━━━`;
-    if (description) p += `\n${description}`;
-    if (targetCustomers) p += `\nГол хэрэглэгчид: ${targetCustomers}.`;
-    if (differentiators) p += `\nЯлгарах давуу тал: ${differentiators}.`;
-  }
-
-  // ── 3. БҮТЭЭГДЭХҮҮН ──────────────────────────────────────────────────────────
-  if (productDetails?.length > 0) {
-    p += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nБҮТЭЭГДЭХҮҮН / ҮЙЛЧИЛГЭЭ\n━━━━━━━━━━━━━━━━━━━━━━━━━`;
-    for (const prod of productDetails) {
-      p += `\n\n▸ ${prod.name}${prod.price ? ` — ${prod.price}₮` : ""}`;
-      if (prod.targetUser) p += `\n  Хэнд: ${prod.targetUser}`;
-      if (prod.features) p += `\n  Онцлог: ${prod.features}`;
-      if (prod.objection && prod.objectionResponse) {
-        p += `\n  "${prod.objection}" → "${prod.objectionResponse}"`;
-      }
-    }
-  }
-
-  // ── 4. ҮЙЛЧИЛГЭЭНИЙ МЭДЭЭЛЭЛ ────────────────────────────────────────────────
-  if (orderProcess || workingHours || returnPolicy) {
-    p += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nҮЙЛЧИЛГЭЭНИЙ МЭДЭЭЛЭЛ\n━━━━━━━━━━━━━━━━━━━━━━━━━`;
-    if (workingHours) p += `\nАжлын цаг: ${workingHours}`;
-    if (orderProcess) p += `\n${orderProcess}`;
-    if (returnPolicy) p += `\nБуцаалт/гомдол: ${returnPolicy}`;
-  }
-
-  // ── 5. ЗАХИАЛГЫН УРСГАЛ (e-commerce) ────────────────────────────────────────
-  if (productDetails?.some((p) => p.price)) {
+  // ── 2. ЗАХИАЛГЫН УРСГАЛ (e-commerce — үнэтэй бүтээгдэхүүн байвал) ────────────
+  if (productDetails?.some((prod) => prod.price)) {
     p += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nЗАХИАЛГЫН ПРОЦЕСС\n━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Бүтээгдэхүүн → тоо → нийт дүн тооцоол
 2. Нэр, утас, хаяг ав
@@ -117,12 +88,7 @@ ${emojiOk ? "Emoji хэрэглэж болно 😊" : "Emoji ашиглахгү
 — ТӨЛБӨРИЙН ХЭЛБЭР асуухгүй — QPay автоматаар шийднэ`;
   }
 
-  // ── 6. АМЖИЛТЫН ЖИШЭЭ ───────────────────────────────────────────────────────
-  if (caseStudy) {
-    p += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nАМЖИЛТЫН ЖИШЭЭ\n━━━━━━━━━━━━━━━━━━━━━━━━━\n${caseStudy}`;
-  }
-
-  // ── 7. TOOL ДУУДАХ ДАРААЛАЛ (Intercom загвар) ────────────────────────────────
+  // ── 3. TOOL ДУУДАХ ДАРААЛАЛ (Intercom загвар) ────────────────────────────────
   p += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nTOOL ДУУДАХ ДАРААЛАЛ\n━━━━━━━━━━━━━━━━━━━━━━━━━
 Алхам 1 — Мэдээлэл асуусан:
   → search_knowledge дуудна (ЗААВАЛ ЭХЛЭЭД)
@@ -189,6 +155,47 @@ ${emojiOk ? "Emoji хэрэглэж болно 😊" : "Emoji ашиглахгү
   }
 
   return p;
+}
+
+// ─── PROFILE-С KB ITEM ҮҮСГЭХ ────────────────────────────────────────────────
+
+function extractKBFromProfile(profile) {
+  const {
+    company, description, targetCustomers, differentiators,
+    productDetails, orderProcess, returnPolicy, workingHours, caseStudy,
+  } = profile;
+  const items = [];
+
+  if (description)
+    items.push({ question: `${company} ямар үйл ажиллагаа явуулдаг вэ?`, answer: description, category: "Компани" });
+  if (targetCustomers)
+    items.push({ question: "Та нарын гол хэрэглэгчид хэн бэ?", answer: targetCustomers, category: "Компани" });
+  if (differentiators)
+    items.push({ question: `${company}-ийн давуу тал юу вэ?`, answer: differentiators, category: "Компани" });
+
+  if (productDetails?.length > 0) {
+    for (const prod of productDetails) {
+      const parts = [];
+      if (prod.targetUser) parts.push(`Хэнд зориулав: ${prod.targetUser}`);
+      if (prod.features) parts.push(prod.features);
+      if (prod.price) parts.push(`Үнэ: ${prod.price}₮`);
+      if (parts.length > 0)
+        items.push({ question: `${prod.name} гэж юу вэ?`, answer: parts.join(". "), category: "Бүтээгдэхүүн" });
+      if (prod.objection && prod.objectionResponse)
+        items.push({ question: prod.objection, answer: prod.objectionResponse, category: "Бүтээгдэхүүн" });
+    }
+  }
+
+  if (workingHours)
+    items.push({ question: "Ажлын цаг хэд вэ?", answer: workingHours, category: "Үйлчилгээ" });
+  if (orderProcess)
+    items.push({ question: "Яаж захиалга хийх вэ?", answer: orderProcess, category: "Үйлчилгээ" });
+  if (returnPolicy)
+    items.push({ question: "Буцаалт, гомдлын бодлого ямар вэ?", answer: returnPolicy, category: "Үйлчилгээ" });
+  if (caseStudy)
+    items.push({ question: `${company}-ийн амжилтын жишээ?`, answer: caseStudy, category: "Жишээ" });
+
+  return items;
 }
 
 // ─── ХУУЧИН CORE TEMPLATE (backwards compat) ─────────────────────────────────
@@ -283,4 +290,4 @@ async function buildSystemPrompt(isNew, orgId = null) {
   return `${body}\n\n${newConvLine}`;
 }
 
-module.exports = { buildSystemPrompt, buildNarrativePrompt, buildCoreTemplate };
+module.exports = { buildSystemPrompt, buildNarrativePrompt, buildCoreTemplate, extractKBFromProfile };
