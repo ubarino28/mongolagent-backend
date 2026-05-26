@@ -336,6 +336,30 @@ router.put("/profile/logo", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// KB merge helper functions
+function normKB(s) {
+  return s.toLowerCase().replace(/[?!。？！.,;:]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function kbSimilarity(a, b) {
+  const wa = new Set(normKB(a).split(" ").filter((w) => w.length > 1));
+  const wb = new Set(normKB(b).split(" ").filter((w) => w.length > 1));
+  const intersection = [...wa].filter((w) => wb.has(w)).length;
+  const union = new Set([...wa, ...wb]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+function mergeAnswers(existing, newAnswer) {
+  // Маш ижил бол урт нь дэлгэрэнгүйг нь ав
+  if (kbSimilarity(existing, newAnswer) >= 0.7) {
+    return existing.length >= newAnswer.length ? existing : newAnswer;
+  }
+  // Өөр мэдээлэл байвал нэмэлт болгон залга
+  const trimExist = existing.trimEnd();
+  const sep = trimExist.endsWith(".") ? " " : ". ";
+  return `${trimExist}${sep}${newAnswer.trim()}`;
+}
+
 // POST /client/settings/builder — Builder AI: бизнесийн мэдээллээс мэдлэгийн сан үүсгэнэ
 router.post("/settings/builder", async (req, res) => {
   try {
@@ -347,7 +371,24 @@ router.post("/settings/builder", async (req, res) => {
     const OpenAI = require("openai");
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+    // Одоо байгаа KB-г ачаалж Builder-д мэдүүлнэ
+    const existingKB = await prisma.turuuKnowledge.findMany({
+      where: { orgId },
+      select: { id: true, question: true, answer: true },
+    });
+
+    const existingKBSummary = existingKB.length > 0
+      ? existingKB.map((k) => `— ${k.question}`).join("\n")
+      : "Хоосон";
+
     const BUILDER_SYSTEM = `Чи Монголын бизнес эздэд AI chatbot тохируулахад туслах мэргэжилтэн.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ОДОО БАЙГАА МЭДЛЭГИЙН САН (${existingKB.length} зүйл)
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${existingKBSummary}
+→ Эдгээрийг ДАВТАН асуухгүй. Байхгүй сэдвүүдийг нэмэлтээр нэм.
+→ Байгаа зүйлийг гүнзгийрүүлж, нэмэлт мэдээлэл нэмэх боломжтой.
 Зорилго: бизнесийн бүрэн дүр төрхийг ойлгож, НАРИЙН, ХУВИЙН AI persona үүсгэх.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -553,13 +594,42 @@ AI нэр: өгөөгүй бол компани нэрнээс үүсгэ ("Но
         const args = JSON.parse(toolCall.function.arguments);
 
         if (toolCall.function.name === "save_knowledge_items") {
+          let created = 0, merged = 0;
+          // Шинэ save бүрт existingKB-г refresh хийнэ
+          const currentKB = await prisma.turuuKnowledge.findMany({
+            where: { orgId }, select: { id: true, question: true, answer: true },
+          });
+
           for (const item of args.items) {
-            await prisma.turuuKnowledge.create({
-              data: { orgId, question: item.question, answer: item.answer, category: item.category || null },
-            });
+            // Ижил утгатай KB хайна (60%+ word overlap)
+            let bestMatch = null;
+            let bestScore = 0;
+            for (const kb of currentKB) {
+              const score = kbSimilarity(item.question, kb.question);
+              if (score > bestScore) { bestScore = score; bestMatch = kb; }
+            }
+
+            if (bestMatch && bestScore >= 0.6) {
+              // Байгаа KB-тэй нэгтгэнэ
+              const mergedAnswer = mergeAnswers(bestMatch.answer, item.answer);
+              await prisma.turuuKnowledge.update({
+                where: { id: bestMatch.id },
+                data: { answer: mergedAnswer },
+              });
+              // currentKB-д шинэчилнэ (дараагийн item-д нөлөөлнө)
+              bestMatch.answer = mergedAnswer;
+              merged++;
+            } else {
+              // Шинэ KB үүсгэнэ
+              const newItem = await prisma.turuuKnowledge.create({
+                data: { orgId, question: item.question, answer: item.answer, category: item.category || null },
+              });
+              currentKB.push({ id: newItem.id, question: item.question, answer: item.answer });
+              created++;
+            }
           }
           savedItems += args.items.length;
-          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ saved: args.items.length }) });
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ created, merged }) });
         }
 
         if (toolCall.function.name === "save_business_profile") {
