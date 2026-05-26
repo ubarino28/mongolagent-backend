@@ -62,7 +62,52 @@ async function incrementMessageUsed(orgId, prisma) {
   } catch { /* non-blocking */ }
 }
 
+// KB-с хайлт хийх — GPT query-г normalize хийсний дараа дуудна
+async function searchKnowledge(orgId, query) {
+  try {
+    const prisma = getPrisma();
+    const items = await prisma.turuuKnowledge.findMany({
+      where: { orgId: orgId || undefined, active: true },
+      select: { question: true, answer: true, category: true },
+    });
+
+    if (items.length === 0) return "Мэдлэгийн сан хоосон байна.";
+
+    const qWords = normalizeText(query).split(" ").filter((w) => w.length > 1);
+
+    const scored = items
+      .map((item) => {
+        const text = normalizeText(`${item.question} ${item.answer}`);
+        const score = qWords.filter((w) => text.includes(w)).length;
+        return { item, score };
+      })
+      .filter((s) => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
+    if (scored.length === 0) return "Мэдлэгийн санд тохирох мэдээлэл олдсонгүй.";
+
+    return scored.map((s) => `А: ${s.item.question}\nХ: ${s.item.answer}`).join("\n\n");
+  } catch {
+    return "Мэдлэгийн санд хандахад алдаа гарлаа.";
+  }
+}
+
 const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "search_knowledge",
+      description: "Хэрэглэгчийн асуултад хамаарах мэдээллийг мэдлэгийн сангаас хайна. Бүтээгдэхүүн, үнэ, хүргэлт, буцаалт, ажлын цаг болон компанийн мэдээлэл авахад ашиглана.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Хайх үгс — монгол хэлээр, тодорхой" },
+        },
+        required: ["query"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -259,6 +304,10 @@ async function processMessage(psid, userText, orgId = null) {
       } else if (toolCall.function.name === "save_order") {
         await saveOrder({ psid, orgId, ...args });
         toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) });
+
+      } else if (toolCall.function.name === "search_knowledge") {
+        const result = await searchKnowledge(orgId, args.query);
+        toolResults.push({ tool_call_id: toolCall.id, content: result });
 
       } else if (toolCall.function.name === "flag_unanswered") {
         // Хариулагдаагүй асуултыг DB-д хадгала

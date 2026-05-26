@@ -26,9 +26,9 @@ function getDefaultBody() {
 ЯРИА УДИРДАХ ЗАРЧИМ
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 — Хэрэглэгчийн хэрэгцээг ойлгоод тохирох үйлчилгээ санал болго
+— Үйлчилгээ, үнэ мэдээлэл асуухад ЗААВАЛ search_knowledge дуудна — таамаглахгүй
 — Холбоо барих мэдээлэл (нэр, утас) авахад save_lead дуудна
 — Consultation хүсвэл save_consultation дуудна
-— Үнийг ЗААВАЛ хэлнэ — нуухгүй
 — Монгол хэлээр хариул, богино тодорхой байлга
 — Нэг мессежид нэг л асуулт`;
 }
@@ -100,8 +100,8 @@ ${taChi === "чи" ? "Хэрэглэгчтэй 'чи' хэлж харилц — 
   p += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nХАРИЛЦААНЫ ДҮРЭМ\n━━━━━━━━━━━━━━━━━━━━━━━━━
 — Мэндлэлийг хариулттай нэгэн зэрэг нэг мессежид бич
 — Нэг мессежид нэг л асуулт
-— Мэдлэгийн санд байхгүй зүйлийг таамаглахгүй
-— Мэдэхгүй бол ЭХЛЭЭД flag_unanswered дуудна, дараа нь: ${contactFallback}
+— Бүтээгдэхүүн, үнэ, хүргэлт, буцаалт мэдээлэл асуухад ЗААВАЛ search_knowledge дуудна — таамаглахгүй
+— search_knowledge "олдсонгүй" буцаавал ЭХЛЭЭД flag_unanswered дуудна, дараа нь: ${contactFallback}
 — Хэрэглэгч хүнтэй ярихыг хүсвэл request_handoff дуудна
 — Холбогдох бүтээгдэхүүн байвал нэг л удаа санал болго
 — Өрсөлдөгч компани дурдахгүй
@@ -142,7 +142,7 @@ function buildCoreTemplate({ company, aiName, contact, extraRules }) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 ДҮРЭМ
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-— Мэдлэгийн санд тулгуурла
+— Бүтээгдэхүүн, үнэ, хүргэлт, буцаалт мэдээлэл асуухад ЗААВАЛ search_knowledge дуудна — таамаглахгүй
 — Нэг мессежид нэг л асуулт
 — Мэдэхгүй бол ЭХЛЭЭД flag_unanswered дуудна, дараа нь: ${contactFallback}
 — Хэрэглэгч хүн хүсвэл request_handoff дуудна
@@ -153,19 +153,15 @@ function buildCoreTemplate({ company, aiName, contact, extraRules }) {
 
 async function buildSystemPrompt(isNew, orgId = null) {
   let bodyPrompt = null;
-  let knowledgeItems = [];
 
   try {
     const prisma = getPrisma();
-    const [settings, knowledge] = await Promise.all([
-      prisma.turuuSettings.findMany({
-        where: {
-          orgId,
-          key: { in: ["system_prompt", "ai_profile", "ai_company", "ai_name", "ai_contact", "ai_extra_rules"] },
-        },
-      }),
-      prisma.turuuKnowledge.findMany({ where: { orgId, active: true }, orderBy: { category: "asc" } }),
-    ]);
+    const settings = await prisma.turuuSettings.findMany({
+      where: {
+        orgId,
+        key: { in: ["system_prompt", "ai_profile", "ai_company", "ai_name", "ai_contact", "ai_extra_rules"] },
+      },
+    });
 
     const s = {};
     settings.forEach((r) => { s[r.key] = r.value; });
@@ -190,8 +186,6 @@ async function buildSystemPrompt(isNew, orgId = null) {
         extraRules: s.ai_extra_rules || "",
       });
     }
-
-    knowledgeItems = knowledge;
   } catch {
     // DB unavailable — defaults
   }
@@ -202,23 +196,7 @@ async function buildSystemPrompt(isNew, orgId = null) {
 
   const body = bodyPrompt || getDefaultBody();
 
-  // Category-гаар бүлэглэсэн мэдлэгийн сан
-  let knowledgeSection = "";
-  if (knowledgeItems.length > 0) {
-    knowledgeSection = "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\nМЭДЛЭГИЙН САН\n━━━━━━━━━━━━━━━━━━━━━━━━━";
-    const byCategory = {};
-    knowledgeItems.forEach((k) => {
-      const cat = k.category || "Ерөнхий";
-      if (!byCategory[cat]) byCategory[cat] = [];
-      byCategory[cat].push(k);
-    });
-    for (const [cat, items] of Object.entries(byCategory)) {
-      knowledgeSection += `\n\n[${cat}]`;
-      items.forEach((k) => { knowledgeSection += `\nА: ${k.question}\nХ: ${k.answer}`; });
-    }
-  }
-
-  return `${body}\n\n${newConvLine}${knowledgeSection}`;
+  return `${body}\n\n${newConvLine}`;
 }
 
 module.exports = { buildSystemPrompt, buildNarrativePrompt, buildCoreTemplate };
