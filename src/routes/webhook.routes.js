@@ -139,4 +139,49 @@ router.post("/qpay/:orderId", async (req, res) => {
   });
 });
 
+// Subscription QPay callback — POST /webhook/sub-qpay/:orgId
+router.post("/sub-qpay/:orgId", async (req, res) => {
+  res.json({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      const prisma = getPrisma();
+      const org = await prisma.organization.findUnique({
+        where: { id: req.params.orgId },
+        select: { id: true, subInvoiceId: true, subQpayStatus: true, name: true, telegramBotToken: true, telegramChatId: true },
+      });
+      if (!org?.subInvoiceId || org.subQpayStatus === "PAID") return;
+
+      const subQpay = require("../services/subscription-qpay.service");
+      const result = await subQpay.checkPayment(org.subInvoiceId);
+      const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+      if (!paid) return;
+
+      // Subscription 1 сараар сунгана
+      const now = new Date();
+      const subscriptionEndsAt = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
+
+      await prisma.organization.update({
+        where: { id: org.id },
+        data: { subQpayStatus: "PAID", subscriptionEndsAt, status: "active", subInvoiceId: null },
+      });
+
+      // Telegram мэдэгдэл — платформ admin-д
+      try {
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        const chatId   = process.env.TELEGRAM_CHAT_ID;
+        if (botToken && chatId) {
+          const axios = require("axios");
+          const text = `💰 Subscription төлбөр хийгдлээ!\nКлиент: ${org.name}\nДуусах огноо: ${subscriptionEndsAt.toLocaleDateString("mn-MN")}`;
+          await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
+        }
+      } catch { /* non-blocking */ }
+
+      console.log(`[SubQPay] Org ${org.id} subscription renewed`);
+    } catch (err) {
+      console.error("[SubQPay callback]", err.message);
+    }
+  });
+});
+
 module.exports = router;
