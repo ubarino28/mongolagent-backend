@@ -1,5 +1,20 @@
 # Mongolagent — Ажлын дүрэм
 
+## Энэ файлын тухай
+Энэ бол 2 developer хамтран ажиллах Mongolagent төслийн дүрэм. **Уншиж дуусаад ажил эхэл** — дундаас орж ажиллахгүй.
+
+## Төслийн бүтэц
+Mongolagent нь 4 тусдаа repo-оос бүрдэнэ:
+- `mongolagent-app` — Mobile / React Native app
+- `mongolagent-web` — Вэбсайт (landing page)
+- `mongolagent-backend` — API сервер
+- `mongolagent-admin` — Admin dashboard
+
+## Хэн юу хийх вэ
+Ажил эхлэхдээ нөгөө developer-тэйгээ **яг аль feature-г хэн хийх талаар тохирсоны дараа** branch үүсгэж эхэл. Нэгэн зэрэг нэг файлд хүрэхгүй байхыг хичээ.
+
+
+
 ## Branch Strategy
 
 ```
