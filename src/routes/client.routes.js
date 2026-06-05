@@ -378,7 +378,7 @@ router.post("/settings/builder", async (req, res) => {
     });
 
     const existingKBSummary = existingKB.length > 0
-      ? existingKB.map((k) => `— ${k.question}`).join("\n")
+      ? existingKB.map((k) => `— ${k.question}: ${k.answer.slice(0, 80)}${k.answer.length > 80 ? "..." : ""}`).join("\n")
       : "Хоосон";
 
     const INIT_BLOCK = existingKB.length === 0
