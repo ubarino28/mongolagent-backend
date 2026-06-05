@@ -381,17 +381,8 @@ router.post("/settings/builder", async (req, res) => {
       ? existingKB.map((k) => `— ${k.question}`).join("\n")
       : "Хоосон";
 
-    const BUILDER_SYSTEM = `Чи Монголын бизнес эздэд AI chatbot тохируулахад туслах мэргэжилтэн.
-Зорилго: 8 чухал асуулт асуугаад KB + AI persona бүтээнэ.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-ОДОО БАЙГАА МЭДЛЭГИЙН САН (${existingKB.length} зүйл)
-━━━━━━━━━━━━━━━━━━━━━━━━━
-${existingKBSummary}
-→ Хариулт нь аль хэдийн байвал тэр асуултыг АЛГАС.
-→ Шинэ эсвэл гүнзгийрүүлэх мэдээлэл байвал нэм.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
+    const INIT_BLOCK = existingKB.length === 0
+      ? `━━━━━━━━━━━━━━━━━━━━━━━━━
 ЭХЛЭХ (__INIT__)
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 Яг ийм мессежээр эхэл:
@@ -402,6 +393,28 @@ ${existingKBSummary}
 **Эхний асуулт:**
 Компанийнхаа нэр болон юу хийдгийг товч хэлнэ үү?
 Нийтлэг жишээ: "Номин цэцэг — гэрийн ургамал, цэцгийн дэлгүүр. УБ-д 3 салбартай, онлайн захиалга хүлээн авдаг.""
+`
+      : `━━━━━━━━━━━━━━━━━━━━━━━━━
+ЭХЛЭХ (__INIT__) — KB аль хэдийн байна
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Мэдлэгийн санд ${existingKB.length} зүйл байна. Дээрх KB жагсаалтыг судлаад:
+1. 8 асуулт тус бүрийн хариулт KB-д бий эсэхийг тодорхойл
+2. Зөвхөн ДУТУУ асуултуудыг асуу — аль хэдийн байгааг дахин асуухгүй
+3. Бүх 8 асуулт хариулагдсан байвал шууд save_knowledge_items + save_business_profile дуудаж дуусга
+Эхний мессежэд аль асуултууд дутуу байгааг тоочиж хэлэх хэрэггүй — зүгээр эхний дутуу асуултаа асуу.
+`;
+
+    const BUILDER_SYSTEM = `Чи Монголын бизнес эздэд AI chatbot тохируулахад туслах мэргэжилтэн.
+Зорилго: 8 чухал асуулт асуугаад KB + AI persona бүтээнэ.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ОДОО БАЙГАА МЭДЛЭГИЙН САН (${existingKB.length} зүйл)
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${existingKBSummary}
+→ Дээрх асуултууд KB-д байгаа тул тэдгээрийг ЗААВАЛ алгасаж дараагийн дутуу асуултаа асуу.
+→ Шинэ эсвэл гүнзгийрүүлэх мэдээлэл байвал нэм.
+
+${INIT_BLOCK}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 8 АСУУЛТ — ДАРААЛАЛ
@@ -921,18 +934,83 @@ router.post("/chat", async (req, res) => {
     const systemPrompt = await buildSystemPrompt(false, orgId);
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+    const CHAT_TOOLS = [
+      {
+        type: "function",
+        function: {
+          name: "search_knowledge",
+          description: "Хэрэглэгчийн асуултад хамаарах мэдээллийг мэдлэгийн сангаас хайна. Бүтээгдэхүүн, үнэ, хүргэлт, буцаалт, ажлын цаг болон компанийн мэдээлэл авахад ашиглана.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "Хайх үгс — монгол хэлээр, тодорхой" },
+            },
+            required: ["query"],
+          },
+        },
+      },
+    ];
+
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...history.slice(-20),
+      { role: "user", content: message.trim() },
+    ];
+
     const response = await openai.chat.completions.create({
       model: aiSettings.model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...history.slice(-20),
-        { role: "user", content: message.trim() },
-      ],
+      messages,
+      tools: CHAT_TOOLS,
+      tool_choice: "auto",
       temperature: aiSettings.temperature,
       max_tokens: aiSettings.max_tokens,
     });
 
-    const reply = response.choices[0].message.content?.trim() || "";
+    const choice = response.choices[0];
+    let reply = "";
+
+    if (choice.finish_reason === "tool_calls") {
+      const toolResults = [];
+      for (const toolCall of choice.message.tool_calls) {
+        if (toolCall.function.name === "search_knowledge") {
+          const { query } = JSON.parse(toolCall.function.arguments);
+          const items = await prisma.turuuKnowledge.findMany({
+            where: { orgId, active: true },
+            select: { question: true, answer: true },
+          });
+          let result = "Мэдлэгийн санд тохирох мэдээлэл олдсонгүй.";
+          if (items.length > 0) {
+            const qWords = normKB(query).split(" ").filter((w) => w.length > 1);
+            const scored = items
+              .map((item) => ({
+                item,
+                score: qWords.filter((w) => normKB(`${item.question} ${item.answer}`).includes(w)).length,
+              }))
+              .filter((s) => s.score > 0)
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 5);
+            if (scored.length > 0) {
+              result = scored.map((s) => `А: ${s.item.question}\nХ: ${s.item.answer}`).join("\n\n");
+            }
+          }
+          toolResults.push({ tool_call_id: toolCall.id, content: result });
+        }
+      }
+      const followUp = await openai.chat.completions.create({
+        model: aiSettings.model,
+        messages: [
+          ...messages,
+          choice.message,
+          ...toolResults.map((r) => ({ role: "tool", tool_call_id: r.tool_call_id, content: r.content })),
+        ],
+        temperature: aiSettings.temperature,
+        max_tokens: 512,
+      });
+      reply = followUp.choices[0].message.content?.trim() || "";
+    } else {
+      reply = choice.message.content?.trim() || "";
+    }
+
     res.json({ reply });
   } catch (e) {
     res.status(500).json({ error: e.message });
