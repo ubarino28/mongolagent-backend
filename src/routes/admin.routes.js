@@ -15,7 +15,7 @@ router.post("/login", (req, res) => {
   }
   const token = jwt.sign(
     { admin: true },
-    process.env.JWT_SECRET || "turuuai_admin_secret_change_me",
+    process.env.JWT_SECRET || "mongolagent_admin_secret_change_me",
     { expiresIn: "7d" }
   );
   res.json({ token });

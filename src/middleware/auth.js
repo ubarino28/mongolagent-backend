@@ -7,7 +7,7 @@ function authMiddleware(req, res, next) {
 
   const token = auth.slice(7);
   try {
-    req.admin = jwt.verify(token, process.env.JWT_SECRET || "turuuai_admin_secret_change_me");
+    req.admin = jwt.verify(token, process.env.JWT_SECRET || "mongolagent_admin_secret_change_me");
     next();
   } catch {
     res.status(401).json({ error: "Invalid token" });

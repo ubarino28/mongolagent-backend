@@ -302,8 +302,51 @@ async function processMessage(psid, userText, orgId = null) {
         toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) });
 
       } else if (toolCall.function.name === "save_order") {
-        await saveOrder({ psid, orgId, ...args });
-        toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) });
+        const order = await saveOrder({ psid, orgId, ...args });
+
+        // QPay auto-invoice: org-д merchant + данс тохируулсан бол автоматаар QR үүсгэнэ
+        let qpayInfo = null;
+        if (orgId && order?.id) {
+          try {
+            const org = await prisma.organization.findUnique({
+              where: { id: orgId },
+              select: { qpayMerchantId: true, qpayBankCode: true, qpayAccountNumber: true, qpayAccountName: true, qpayBranchCode: true },
+            });
+            if (org?.qpayMerchantId && org?.qpayAccountNumber) {
+              const qpay = require("./qpay.service");
+              const result = await qpay.createInvoice({
+                merchantId: org.qpayMerchantId,
+                branchCode: org.qpayBranchCode || "BRANCH_001",
+                amount: args.totalAmount || 0,
+                description: `Захиалга #${order.id.slice(-6).toUpperCase()}`,
+                customerName: args.customerName || "Хэрэглэгч",
+                bankAccounts: [{
+                  default: true,
+                  account_bank_code: org.qpayBankCode,
+                  account_number: org.qpayAccountNumber,
+                  account_name: org.qpayAccountName,
+                  is_default: true,
+                }],
+                callbackUrl: `${process.env.API_URL || "https://api.mongolagent.mn"}/webhook/qpay/${order.id}`,
+              });
+              await prisma.turuuOrder.update({
+                where: { id: order.id },
+                data: { qpayInvoiceId: result.invoice_id, qpayQrText: result.qr_text, qpayUrls: result.urls || [], qpayStatus: "PENDING" },
+              });
+              qpayInfo = qpay.buildPaymentMessage(result, args.totalAmount, order.id.slice(-6).toUpperCase());
+            }
+          } catch (qErr) {
+            console.error("[QPay auto-invoice]", qErr.message);
+          }
+        }
+
+        toolResults.push({
+          tool_call_id: toolCall.id,
+          content: JSON.stringify({
+            success: true,
+            ...(qpayInfo ? { qpayReady: true, qpayMessage: qpayInfo } : { qpayReady: false }),
+          }),
+        });
 
       } else if (toolCall.function.name === "search_knowledge") {
         const result = await searchKnowledge(orgId, args.query);

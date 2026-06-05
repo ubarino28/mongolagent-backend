@@ -15,7 +15,7 @@ const FROM_EMAIL = process.env.FROM_EMAIL || "noreply@mongolagent.mn";
 function signToken(org) {
   return jwt.sign(
     { orgId: org.id, slug: org.slug, name: org.name, plan: org.plan },
-    process.env.JWT_SECRET || "turuuai_admin_secret_change_me",
+    process.env.JWT_SECRET || "mongolagent_admin_secret_change_me",
     { expiresIn: "30d" }
   );
 }
@@ -161,7 +161,7 @@ router.get("/me", async (req, res) => {
     const auth = req.headers.authorization;
     if (!auth?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
     const token = auth.slice(7);
-    const payload = jwt.verify(token, process.env.JWT_SECRET || "turuuai_admin_secret_change_me");
+    const payload = jwt.verify(token, process.env.JWT_SECRET || "mongolagent_admin_secret_change_me");
     if (!payload.orgId) return res.status(401).json({ error: "Invalid" });
 
     const prisma = getPrisma();

@@ -1,5 +1,5 @@
 {
-  "name": "turuuai-backend",
+  "name": "mongolagent-backend",
   "version": "1.0.0",
   "description": "Түрүү AI — Facebook Messenger AI Chatbot Backend",
   "main": "src/index.js",

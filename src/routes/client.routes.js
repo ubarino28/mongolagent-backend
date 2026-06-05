@@ -16,8 +16,8 @@ function getSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 }
 
-const API_URL = process.env.API_URL || "https://turuuai-backend.onrender.com";
-const FRONTEND_URL = process.env.FRONTEND_APP_URL || "https://turuuai-app.vercel.app";
+const API_URL = process.env.API_URL || "https://mongolagent-backend.onrender.com";
+const FRONTEND_URL = process.env.FRONTEND_APP_URL || "https://mongolagent-app.vercel.app";
 const FB_CALLBACK = `${API_URL}/client/profile/facebook/callback`;
 
 // Facebook OAuth callback — auth middleware байхгүй (Facebook-аас ирдэг)
@@ -1124,6 +1124,172 @@ router.post("/conversations/:psid/handoff-clear", async (req, res) => {
       data: { handoffRequested: false },
     });
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── QPAY ────────────────────────────────────────────────────────────────────
+
+// GET /client/profile/qpay — QPay тохиргоо харах
+router.get("/profile/qpay", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({
+      where: { id: req.org.orgId },
+      select: {
+        qpayMerchantId: true,
+        qpayBankCode: true,
+        qpayAccountNumber: true,
+        qpayAccountName: true,
+        qpayBranchCode: true,
+      },
+    });
+    const { BANK_CODES } = require("../services/qpay.service");
+    res.json({ ...org, bankCodes: BANK_CODES });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /client/profile/qpay/bank — банкны данс хадгалах
+router.put("/profile/qpay/bank", async (req, res) => {
+  try {
+    const { bankCode, accountNumber, accountName, branchCode } = req.body;
+    if (!bankCode || !accountNumber || !accountName) {
+      return res.status(400).json({ error: "bankCode, accountNumber, accountName шаардлагатай" });
+    }
+    const prisma = getPrisma();
+    await prisma.organization.update({
+      where: { id: req.org.orgId },
+      data: {
+        qpayBankCode: bankCode,
+        qpayAccountNumber: accountNumber,
+        qpayAccountName: accountName,
+        qpayBranchCode: branchCode || "BRANCH_001",
+      },
+    });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/profile/qpay/register — QPay sub-merchant болгох
+router.post("/profile/qpay/register", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({ where: { id: req.org.orgId } });
+    if (org.qpayMerchantId) {
+      return res.status(400).json({ error: "Аль хэдийн QPay merchant болсон байна", merchantId: org.qpayMerchantId });
+    }
+
+    const { type, ...data } = req.body; // type: "company" | "person"
+    if (!type || !["company", "person"].includes(type)) {
+      return res.status(400).json({ error: "type: 'company' эсвэл 'person' байх ёстой" });
+    }
+
+    const qpay = require("../services/qpay.service");
+    const result = type === "company"
+      ? await qpay.createMerchantCompany(data)
+      : await qpay.createMerchantPerson(data);
+
+    const merchantId = result.id || result.merchant_id;
+    if (!merchantId) return res.status(500).json({ error: "QPay-аас merchant_id ирсэнгүй", result });
+
+    await prisma.organization.update({
+      where: { id: req.org.orgId },
+      data: { qpayMerchantId: merchantId },
+    });
+
+    res.json({ ok: true, merchantId, result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /client/profile/qpay/merchant — QPay-аас merchant мэдээлэл авах
+router.get("/profile/qpay/merchant", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({
+      where: { id: req.org.orgId },
+      select: { qpayMerchantId: true },
+    });
+    if (!org.qpayMerchantId) return res.status(400).json({ error: "QPay merchant бүртгэлгүй" });
+    const qpay = require("../services/qpay.service");
+    const result = await qpay.getMerchant(org.qpayMerchantId);
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/orders/:id/invoice — QPay invoice + QR үүсгэх
+router.post("/orders/:id/invoice", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const order = await prisma.turuuOrder.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!order) return res.status(404).json({ error: "Захиалга олдсонгүй" });
+
+    if (order.qpayInvoiceId) {
+      return res.json({
+        ok: true,
+        alreadyCreated: true,
+        invoiceId: order.qpayInvoiceId,
+        qrText: order.qpayQrText,
+        urls: order.qpayUrls,
+        qpayStatus: order.qpayStatus,
+      });
+    }
+
+    const org = await prisma.organization.findUnique({ where: { id: req.org.orgId } });
+    if (!org.qpayMerchantId) return res.status(400).json({ error: "QPay merchant бүртгэлгүй. Эхлээд /profile/qpay/register дуудна уу." });
+    if (!org.qpayAccountNumber) return res.status(400).json({ error: "Банкны дансны мэдээлэл оруулаагүй. /profile/qpay/bank дуудна уу." });
+
+    const qpay = require("../services/qpay.service");
+    const result = await qpay.createInvoice({
+      merchantId: org.qpayMerchantId,
+      branchCode: org.qpayBranchCode || "BRANCH_001",
+      amount: order.totalAmount || 0,
+      description: `Захиалга #${order.id.slice(-6).toUpperCase()}`,
+      customerName: order.customerName || "Хэрэглэгч",
+      bankAccounts: [{
+        default: true,
+        account_bank_code: org.qpayBankCode,
+        account_number: org.qpayAccountNumber,
+        account_name: org.qpayAccountName,
+        is_default: true,
+      }],
+      callbackUrl: `${process.env.API_URL || "https://api.mongolagent.mn"}/webhook/qpay/${order.id}`,
+    });
+
+    await prisma.turuuOrder.update({
+      where: { id: order.id },
+      data: {
+        qpayInvoiceId: result.invoice_id,
+        qpayQrText: result.qr_text,
+        qpayUrls: result.urls || [],
+        qpayStatus: "PENDING",
+      },
+    });
+
+    res.json({ ok: true, invoiceId: result.invoice_id, qrText: result.qr_text, urls: result.urls });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/orders/:id/check-payment — QPay төлбөр шалгах
+router.post("/orders/:id/check-payment", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const order = await prisma.turuuOrder.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!order) return res.status(404).json({ error: "Захиалга олдсонгүй" });
+    if (!order.qpayInvoiceId) return res.status(400).json({ error: "Invoice үүсгэгдээгүй байна" });
+
+    const qpay = require("../services/qpay.service");
+    const result = await qpay.checkPayment(order.qpayInvoiceId);
+
+    // count > 0 эсвэл payment_status === "PAID" бол төлсөн
+    const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+
+    if (paid && order.qpayStatus !== "PAID") {
+      await prisma.turuuOrder.update({
+        where: { id: order.id },
+        data: { qpayStatus: "PAID", status: "PAID" },
+      });
+    }
+
+    res.json({ paid, qpayStatus: paid ? "PAID" : "PENDING", result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

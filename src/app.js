@@ -13,16 +13,12 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3001",
   "http://localhost:3002",
-  "https://turuuai.mn",
-  "https://www.turuuai.mn",
-  "https://admin.turuuai.mn",
-  "https://app.turuuai.mn",
-  "https://turuuai-admin.vercel.app",
-  "https://turuuai-app.vercel.app",
   "https://mongolagent.mn",
   "https://www.mongolagent.mn",
   "https://app.mongolagent.mn",
   "https://admin.mongolagent.mn",
+  "https://mongolagent-admin.vercel.app",
+  "https://mongolagent-app.vercel.app",
 ];
 
 app.use(cors({
@@ -35,7 +31,7 @@ app.use(cors({
 
 app.use(express.json());
 
-app.get("/health", (req, res) => res.json({ ok: true, service: "turuuai-backend" }));
+app.get("/health", (req, res) => res.json({ ok: true, service: "mongolagent-backend" }));
 
 app.use("/webhook", webhookRouter);
 app.use("/admin", adminRouter);

@@ -3,6 +3,7 @@ const express = require("express");
 const { processMessage } = require("../services/ai.service");
 const { sendText, sendTypingOn } = require("../services/facebook.service");
 const { getPrisma } = require("../lib/db");
+const { checkPayment } = require("../services/qpay.service");
 
 const router = express.Router();
 
@@ -72,6 +73,68 @@ router.post("/", (req, res) => {
           }
         }
       }
+    }
+  });
+});
+
+// QPay payment callback — POST /webhook/qpay/:orderId
+router.post("/qpay/:orderId", async (req, res) => {
+  // QPay-д хурдан 200 хариулна
+  res.json({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      const prisma = getPrisma();
+      const order = await prisma.turuuOrder.findUnique({ where: { id: req.params.orderId } });
+      if (!order?.qpayInvoiceId || order.qpayStatus === "PAID") return;
+
+      const result = await checkPayment(order.qpayInvoiceId);
+      const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+      if (!paid) return;
+
+      await prisma.turuuOrder.update({
+        where: { id: order.id },
+        data: { qpayStatus: "PAID", status: "PAID" },
+      });
+
+      // Telegram мэдэгдэл
+      if (order.orgId) {
+        try {
+          const org = await prisma.organization.findUnique({
+            where: { id: order.orgId },
+            select: { telegramBotToken: true, telegramChatId: true },
+          });
+          const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+          const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+          if (botToken && chatId) {
+            const axios = require("axios");
+            const text = `✅ QPay төлбөр хийгдлээ!\nЗахиалга #${order.id.slice(-6).toUpperCase()}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}`;
+            await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
+          }
+        } catch { /* non-blocking */ }
+      }
+
+      // Facebook Messenger-д баталгаажуулалт явуулах
+      if (order.psid && order.orgId) {
+        try {
+          const org = await prisma.organization.findUnique({
+            where: { id: order.orgId },
+            select: { fbPageToken: true },
+          });
+          const token = org?.fbPageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+          if (token) {
+            await sendText(
+              order.psid,
+              `✅ Таны төлбөр амжилттай хийгдлээ! Захиалга #${order.id.slice(-6).toUpperCase()} батлагдлаа. Тантай удахгүй холбогдно 🙏`,
+              token
+            ).catch(() => {});
+          }
+        } catch { /* non-blocking */ }
+      }
+
+      console.log(`[QPay] Order ${order.id} PAID`);
+    } catch (err) {
+      console.error("[QPay callback]", err.message);
     }
   });
 });

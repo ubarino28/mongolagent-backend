@@ -19,6 +19,11 @@ model Organization {
   telegramBotToken   String?
   telegramChatId     String?
   logoUrl            String?
+  qpayMerchantId     String?
+  qpayBankCode       String?
+  qpayAccountNumber  String?
+  qpayAccountName    String?
+  qpayBranchCode     String?
   plan                String   @default("starter")
   status              String   @default("active")
   messageUsed         Int      @default(0)
@@ -103,6 +108,10 @@ model TuruuOrder {
   status          String       @default("NEW")
   notes           String?
   psid            String?
+  qpayInvoiceId   String?
+  qpayQrText      String?
+  qpayUrls        Json?
+  qpayStatus      String?      @default("PENDING")
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 }
