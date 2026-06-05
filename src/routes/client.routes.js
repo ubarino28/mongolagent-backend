@@ -897,14 +897,77 @@ router.get("/billing", async (req, res) => {
 router.post("/billing/upgrade", async (req, res) => {
   try {
     const { targetPlan } = req.body;
-    const UPGRADE_ORDER = ["starter", "growth", "enterprise"];
+    const UPGRADE_ORDER = ["starter", "growth", "business", "enterprise"];
     const prisma = getPrisma();
     const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { plan: true, email: true, name: true } });
     if (UPGRADE_ORDER.indexOf(targetPlan) <= UPGRADE_ORDER.indexOf(org.plan)) {
       return res.status(400).json({ error: "Зөвхөн дээш ахиулах боломжтой" });
     }
-    // TODO: QPay integration — одоогоор хүсэлт бүртгэж имэйл явуулна
     res.json({ ok: true, message: "Upgrade хүсэлт хүлээн авлаа. Манай баг тантай холбогдоно." });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/billing/pay — QPay subscription invoice үүсгэх
+router.post("/billing/pay", async (req, res) => {
+  try {
+    const { plan } = req.body;
+    if (!plan) return res.status(400).json({ error: "plan шаардлагатай" });
+
+    const PLAN_PRICE = { starter: 79900, growth: 149900, business: 249900, enterprise: 499900 };
+    const PLAN_NAME  = { starter: "Starter", growth: "Growth", business: "Business", enterprise: "Enterprise" };
+    const amount = PLAN_PRICE[plan];
+    if (!amount) return res.status(400).json({ error: "Буруу план" });
+
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({
+      where: { id: req.org.orgId },
+      select: { id: true, name: true, subInvoiceId: true, subQpayStatus: true },
+    });
+
+    // Хэрэв хүлээгдэж буй invoice байвал дахин ашиглана
+    if (org.subInvoiceId && org.subQpayStatus !== "PAID") {
+      return res.json({ ok: true, alreadyCreated: true, invoiceId: org.subInvoiceId });
+    }
+
+    const subQpay = require("../services/subscription-qpay.service");
+    const result = await subQpay.createInvoice({
+      orgId: org.id,
+      plan,
+      amount,
+      description: `Mongol Agent — ${PLAN_NAME[plan]} план (1 сар)`,
+    });
+
+    await prisma.organization.update({
+      where: { id: org.id },
+      data: { subInvoiceId: result.invoice_id, subQpayStatus: "PENDING" },
+    });
+
+    res.json({ ok: true, invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/billing/pay/check — Subscription төлбөр шалгах
+router.post("/billing/pay/check", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({
+      where: { id: req.org.orgId },
+      select: { subInvoiceId: true, subQpayStatus: true },
+    });
+    if (!org.subInvoiceId) return res.status(400).json({ error: "Invoice байхгүй" });
+
+    const subQpay = require("../services/subscription-qpay.service");
+    const result = await subQpay.checkPayment(org.subInvoiceId);
+    const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+
+    if (paid && org.subQpayStatus !== "PAID") {
+      await prisma.organization.update({
+        where: { id: req.org.orgId },
+        data: { subQpayStatus: "PAID" },
+      });
+    }
+
+    res.json({ paid, result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
