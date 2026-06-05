@@ -24,6 +24,8 @@ model Organization {
   qpayAccountNumber  String?
   qpayAccountName    String?
   qpayBranchCode     String?
+  subInvoiceId       String?
+  subQpayStatus      String?
   plan                String   @default("starter")
   status              String   @default("active")
   messageUsed         Int      @default(0)

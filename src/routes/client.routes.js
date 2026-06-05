@@ -378,20 +378,11 @@ router.post("/settings/builder", async (req, res) => {
     });
 
     const existingKBSummary = existingKB.length > 0
-      ? existingKB.map((k) => `— ${k.question}`).join("\n")
+      ? existingKB.map((k) => `— ${k.question}: ${k.answer.slice(0, 80)}${k.answer.length > 80 ? "..." : ""}`).join("\n")
       : "Хоосон";
 
-    const BUILDER_SYSTEM = `Чи Монголын бизнес эздэд AI chatbot тохируулахад туслах мэргэжилтэн.
-Зорилго: 8 чухал асуулт асуугаад KB + AI persona бүтээнэ.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-ОДОО БАЙГАА МЭДЛЭГИЙН САН (${existingKB.length} зүйл)
-━━━━━━━━━━━━━━━━━━━━━━━━━
-${existingKBSummary}
-→ Хариулт нь аль хэдийн байвал тэр асуултыг АЛГАС.
-→ Шинэ эсвэл гүнзгийрүүлэх мэдээлэл байвал нэм.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
+    const INIT_BLOCK = existingKB.length === 0
+      ? `━━━━━━━━━━━━━━━━━━━━━━━━━
 ЭХЛЭХ (__INIT__)
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 Яг ийм мессежээр эхэл:
@@ -402,6 +393,28 @@ ${existingKBSummary}
 **Эхний асуулт:**
 Компанийнхаа нэр болон юу хийдгийг товч хэлнэ үү?
 Нийтлэг жишээ: "Номин цэцэг — гэрийн ургамал, цэцгийн дэлгүүр. УБ-д 3 салбартай, онлайн захиалга хүлээн авдаг.""
+`
+      : `━━━━━━━━━━━━━━━━━━━━━━━━━
+ЭХЛЭХ (__INIT__) — KB аль хэдийн байна
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Мэдлэгийн санд ${existingKB.length} зүйл байна. Дээрх KB жагсаалтыг судлаад:
+1. 8 асуулт тус бүрийн хариулт KB-д бий эсэхийг тодорхойл
+2. Зөвхөн ДУТУУ асуултуудыг асуу — аль хэдийн байгааг дахин асуухгүй
+3. Бүх 8 асуулт хариулагдсан байвал шууд save_knowledge_items + save_business_profile дуудаж дуусга
+Эхний мессежэд аль асуултууд дутуу байгааг тоочиж хэлэх хэрэггүй — зүгээр эхний дутуу асуултаа асуу.
+`;
+
+    const BUILDER_SYSTEM = `Чи Монголын бизнес эздэд AI chatbot тохируулахад туслах мэргэжилтэн.
+Зорилго: 8 чухал асуулт асуугаад KB + AI persona бүтээнэ.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ОДОО БАЙГАА МЭДЛЭГИЙН САН (${existingKB.length} зүйл)
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${existingKBSummary}
+→ Дээрх асуултууд KB-д байгаа тул тэдгээрийг ЗААВАЛ алгасаж дараагийн дутуу асуултаа асуу.
+→ Шинэ эсвэл гүнзгийрүүлэх мэдээлэл байвал нэм.
+
+${INIT_BLOCK}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 8 АСУУЛТ — ДАРААЛАЛ
@@ -884,14 +897,77 @@ router.get("/billing", async (req, res) => {
 router.post("/billing/upgrade", async (req, res) => {
   try {
     const { targetPlan } = req.body;
-    const UPGRADE_ORDER = ["starter", "growth", "enterprise"];
+    const UPGRADE_ORDER = ["starter", "growth", "business", "enterprise"];
     const prisma = getPrisma();
     const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { plan: true, email: true, name: true } });
     if (UPGRADE_ORDER.indexOf(targetPlan) <= UPGRADE_ORDER.indexOf(org.plan)) {
       return res.status(400).json({ error: "Зөвхөн дээш ахиулах боломжтой" });
     }
-    // TODO: QPay integration — одоогоор хүсэлт бүртгэж имэйл явуулна
     res.json({ ok: true, message: "Upgrade хүсэлт хүлээн авлаа. Манай баг тантай холбогдоно." });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/billing/pay — QPay subscription invoice үүсгэх
+router.post("/billing/pay", async (req, res) => {
+  try {
+    const { plan } = req.body;
+    if (!plan) return res.status(400).json({ error: "plan шаардлагатай" });
+
+    const PLAN_PRICE = { starter: 79900, growth: 149900, business: 249900, enterprise: 499900 };
+    const PLAN_NAME  = { starter: "Starter", growth: "Growth", business: "Business", enterprise: "Enterprise" };
+    const amount = PLAN_PRICE[plan];
+    if (!amount) return res.status(400).json({ error: "Буруу план" });
+
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({
+      where: { id: req.org.orgId },
+      select: { id: true, name: true, subInvoiceId: true, subQpayStatus: true },
+    });
+
+    // Хэрэв хүлээгдэж буй invoice байвал дахин ашиглана
+    if (org.subInvoiceId && org.subQpayStatus !== "PAID") {
+      return res.json({ ok: true, alreadyCreated: true, invoiceId: org.subInvoiceId });
+    }
+
+    const subQpay = require("../services/subscription-qpay.service");
+    const result = await subQpay.createInvoice({
+      orgId: org.id,
+      plan,
+      amount,
+      description: `Mongol Agent — ${PLAN_NAME[plan]} план (1 сар)`,
+    });
+
+    await prisma.organization.update({
+      where: { id: org.id },
+      data: { subInvoiceId: result.invoice_id, subQpayStatus: "PENDING" },
+    });
+
+    res.json({ ok: true, invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/billing/pay/check — Subscription төлбөр шалгах
+router.post("/billing/pay/check", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({
+      where: { id: req.org.orgId },
+      select: { subInvoiceId: true, subQpayStatus: true },
+    });
+    if (!org.subInvoiceId) return res.status(400).json({ error: "Invoice байхгүй" });
+
+    const subQpay = require("../services/subscription-qpay.service");
+    const result = await subQpay.checkPayment(org.subInvoiceId);
+    const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+
+    if (paid && org.subQpayStatus !== "PAID") {
+      await prisma.organization.update({
+        where: { id: req.org.orgId },
+        data: { subQpayStatus: "PAID" },
+      });
+    }
+
+    res.json({ paid, result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -921,18 +997,83 @@ router.post("/chat", async (req, res) => {
     const systemPrompt = await buildSystemPrompt(false, orgId);
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+    const CHAT_TOOLS = [
+      {
+        type: "function",
+        function: {
+          name: "search_knowledge",
+          description: "Хэрэглэгчийн асуултад хамаарах мэдээллийг мэдлэгийн сангаас хайна. Бүтээгдэхүүн, үнэ, хүргэлт, буцаалт, ажлын цаг болон компанийн мэдээлэл авахад ашиглана.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "Хайх үгс — монгол хэлээр, тодорхой" },
+            },
+            required: ["query"],
+          },
+        },
+      },
+    ];
+
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...history.slice(-20),
+      { role: "user", content: message.trim() },
+    ];
+
     const response = await openai.chat.completions.create({
       model: aiSettings.model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...history.slice(-20),
-        { role: "user", content: message.trim() },
-      ],
+      messages,
+      tools: CHAT_TOOLS,
+      tool_choice: "auto",
       temperature: aiSettings.temperature,
       max_tokens: aiSettings.max_tokens,
     });
 
-    const reply = response.choices[0].message.content?.trim() || "";
+    const choice = response.choices[0];
+    let reply = "";
+
+    if (choice.finish_reason === "tool_calls") {
+      const toolResults = [];
+      for (const toolCall of choice.message.tool_calls) {
+        if (toolCall.function.name === "search_knowledge") {
+          const { query } = JSON.parse(toolCall.function.arguments);
+          const items = await prisma.turuuKnowledge.findMany({
+            where: { orgId, active: true },
+            select: { question: true, answer: true },
+          });
+          let result = "Мэдлэгийн санд тохирох мэдээлэл олдсонгүй.";
+          if (items.length > 0) {
+            const qWords = normKB(query).split(" ").filter((w) => w.length > 1);
+            const scored = items
+              .map((item) => ({
+                item,
+                score: qWords.filter((w) => normKB(`${item.question} ${item.answer}`).includes(w)).length,
+              }))
+              .filter((s) => s.score > 0)
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 5);
+            if (scored.length > 0) {
+              result = scored.map((s) => `А: ${s.item.question}\nХ: ${s.item.answer}`).join("\n\n");
+            }
+          }
+          toolResults.push({ tool_call_id: toolCall.id, content: result });
+        }
+      }
+      const followUp = await openai.chat.completions.create({
+        model: aiSettings.model,
+        messages: [
+          ...messages,
+          choice.message,
+          ...toolResults.map((r) => ({ role: "tool", tool_call_id: r.tool_call_id, content: r.content })),
+        ],
+        temperature: aiSettings.temperature,
+        max_tokens: 512,
+      });
+      reply = followUp.choices[0].message.content?.trim() || "";
+    } else {
+      reply = choice.message.content?.trim() || "";
+    }
+
     res.json({ reply });
   } catch (e) {
     res.status(500).json({ error: e.message });
