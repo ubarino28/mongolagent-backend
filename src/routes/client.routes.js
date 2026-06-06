@@ -2,6 +2,8 @@
 const express = require("express");
 const axios = require("axios");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
+const { Resend } = require("resend");
 const multer = require("multer");
 const { createClient } = require("@supabase/supabase-js");
 const { getPrisma } = require("../lib/db");
@@ -18,6 +20,8 @@ function getSupabase() {
 
 const API_URL = process.env.API_URL || "https://mongolagent-backend.onrender.com";
 const FRONTEND_URL = process.env.FRONTEND_APP_URL || "https://mongolagent-app.vercel.app";
+const resend = new Resend(process.env.RESEND_API_KEY);
+const FROM_EMAIL = process.env.FROM_EMAIL || "noreply@mongolagent.mn";
 const FB_CALLBACK = `${API_URL}/client/profile/facebook/callback`;
 
 // Facebook OAuth callback — auth middleware байхгүй (Facebook-аас ирдэг)
@@ -1088,6 +1092,69 @@ router.put("/profile/name", async (req, res) => {
     const prisma = getPrisma();
     await prisma.organization.update({ where: { id: req.org.orgId }, data: { name: name.trim() } });
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/profile/email/request — шинэ email рүү код илгээх
+router.post("/profile/email/request", async (req, res) => {
+  try {
+    const { newEmail } = req.body;
+    if (!newEmail?.trim()) return res.status(400).json({ error: "Шинэ имэйл шаардлагатай" });
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newEmail)) return res.status(400).json({ error: "Имэйл формат буруу байна" });
+
+    const prisma = getPrisma();
+    const existing = await prisma.organization.findUnique({ where: { email: newEmail.toLowerCase() } });
+    if (existing) return res.status(400).json({ error: "Энэ имэйл аль хэдийн бүртгэлтэй байна" });
+
+    const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { email: true, name: true } });
+
+    // Хуучин code-уудыг устгана
+    await prisma.emailChangeToken.deleteMany({ where: { orgId: req.org.orgId } });
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await prisma.emailChangeToken.create({ data: { orgId: req.org.orgId, newEmail: newEmail.toLowerCase(), code, expiresAt } });
+
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: org.email,
+      subject: "Mongol Agent — Имэйл солих баталгаажуулалт",
+      html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#07070e;color:#f1f5f9;border-radius:12px">
+        <div style="margin-bottom:24px"><span style="font-size:20px;font-weight:800;color:#818cf8">Mongol</span><span style="font-size:20px;font-weight:800;color:#94a3b8">Agent</span></div>
+        <h2 style="font-size:18px;font-weight:700;margin-bottom:12px">Имэйл солих баталгаажуулалт</h2>
+        <p style="color:#94a3b8;font-size:14px;line-height:1.7;margin-bottom:24px">Шинэ имэйл хаяг: <strong style="color:#f1f5f9">${newEmail}</strong></p>
+        <div style="background:#1e1b4b;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px">
+          <div style="font-size:36px;font-weight:800;letter-spacing:8px;color:#818cf8">${code}</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:8px">10 минутын дотор ашиглана уу</div>
+        </div>
+        <p style="color:#64748b;font-size:12px">Хэрэв та энэ хүсэлт илгээгээгүй бол энэ имэйлийг үл тоомсорлоно уу.</p>
+      </div>`,
+    });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/profile/email/verify — код баталгаажуулж имэйл солих
+router.post("/profile/email/verify", async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: "Код шаардлагатай" });
+
+    const prisma = getPrisma();
+    const token = await prisma.emailChangeToken.findFirst({
+      where: { orgId: req.org.orgId, used: false, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!token) return res.status(400).json({ error: "Код хүчингүй эсвэл хугацаа дууссан байна" });
+    if (token.code !== code.toString()) return res.status(400).json({ error: "Код буруу байна" });
+
+    // Email шинэчлэх
+    await prisma.organization.update({ where: { id: req.org.orgId }, data: { email: token.newEmail } });
+    await prisma.emailChangeToken.update({ where: { id: token.id }, data: { used: true } });
+
+    res.json({ ok: true, newEmail: token.newEmail });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
