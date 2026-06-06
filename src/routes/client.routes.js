@@ -240,8 +240,8 @@ router.post("/conversations/:psid/reply", async (req, res) => {
     messages.push({ role: "assistant", content: `[Admin] ${text}` });
     await prisma.turuuChat.upsert({
       where: { orgId_psid: { orgId: req.org.orgId, psid: req.params.psid } },
-      create: { psid: req.params.psid, orgId: req.org.orgId, messages },
-      update: { messages },
+      create: { psid: req.params.psid, orgId: req.org.orgId, messages, handoffRequested: true, handoffAt: new Date() },
+      update: { messages, handoffRequested: true, handoffAt: new Date() },
     });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
