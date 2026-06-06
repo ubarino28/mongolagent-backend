@@ -52,8 +52,9 @@ model TuruuChat {
   orgId            String?
   messages         Json     @default("[]")
   blocked          Boolean  @default(false)
-  handoffRequested Boolean  @default(false)
-  createdAt        DateTime @default(now())
+  handoffRequested Boolean   @default(false)
+  handoffAt        DateTime?
+  createdAt        DateTime  @default(now())
   updatedAt        DateTime @updatedAt
 
   @@unique([orgId, psid])

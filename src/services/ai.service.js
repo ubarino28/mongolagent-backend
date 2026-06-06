@@ -227,10 +227,16 @@ async function loadAISettings(orgId = null) {
 async function processMessage(psid, userText, orgId = null) {
   const prisma = getPrisma();
 
-  // Block шалгах
+  // Block + handoff шалгах
   try {
     const chatRecord = await prisma.turuuChat.findFirst({ where: { psid, orgId } });
     if (chatRecord?.blocked) return null;
+    if (chatRecord?.handoffRequested) {
+      const elapsed = chatRecord.handoffAt ? Date.now() - new Date(chatRecord.handoffAt).getTime() : Infinity;
+      if (elapsed < 10 * 60 * 1000) return null; // 10 минут болоогүй — AI хариулахгүй
+      // 10 минут өнгөрсөн — auto-clear, AI буцаж асна
+      await prisma.turuuChat.update({ where: { id: chatRecord.id }, data: { handoffRequested: false, handoffAt: null } });
+    }
   } catch { /* proceed */ }
 
   // KB exact match cache — таарвал OpenAI дуудахгүй, хямд бөгөөд хурдан
@@ -362,11 +368,11 @@ async function processMessage(psid, userText, orgId = null) {
         toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ flagged: true }) });
 
       } else if (toolCall.function.name === "request_handoff") {
-        // Handoff flag TuruuChat-т тэмдэглэ
+        // Handoff flag TuruuChat-т тэмдэглэ + цаг тэмдэглэх
         try {
           await prisma.turuuChat.updateMany({
             where: { psid, orgId },
-            data: { handoffRequested: true },
+            data: { handoffRequested: true, handoffAt: new Date() },
           });
         } catch { /* non-blocking */ }
         toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ handoff: true }) });
