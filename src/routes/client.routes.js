@@ -880,7 +880,7 @@ router.get("/billing", async (req, res) => {
     const prisma = getPrisma();
     const org = await prisma.organization.findUnique({
       where: { id: req.org.orgId },
-      select: { plan: true, messageUsed: true, quotaResetAt: true, createdAt: true },
+      select: { plan: true, messageUsed: true, quotaResetAt: true, createdAt: true, subscriptionEndsAt: true },
     });
     const quota = PLAN_QUOTA[org.plan] || 10000;
     const PLANS = {

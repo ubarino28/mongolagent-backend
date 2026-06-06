@@ -1,78 +1,64 @@
 "use strict";
+// Mongol Agent платформын subscription төлбөр — quickqr.qpay.mn ашиглана
+// Token-г qpay.service.js-тэй хуваалцана (нэг account)
+const { getToken } = require("./qpay.service");
 const axios = require("axios");
 
-const BASE_URL = "https://merchant.qpay.mn";
-
-// Token cache — 24 цагт нэг удаа авна
-let _token = null;
-let _tokenExp = 0;
-
-async function getToken() {
-  if (_token && Date.now() < _tokenExp) return _token;
-
-  const username = process.env.SUB_QPAY_USERNAME;
-  const password = process.env.SUB_QPAY_PASSWORD;
-  if (!username || !password) throw new Error("SUB_QPAY_USERNAME / SUB_QPAY_PASSWORD env тохируулаагүй");
-
-  const res = await axios.post(`${BASE_URL}/v2/auth/token`, "", {
-    auth: { username, password },
-    headers: { "Content-Type": "application/json" },
-  });
-
-  _token = res.data.access_token;
-  _tokenExp = Date.now() + 23 * 60 * 60 * 1000;
-  return _token;
-}
-
-async function _refreshToken() {
-  _token = null;
-  _tokenExp = 0;
-  return getToken();
-}
+const BASE_URL = "https://quickqr.qpay.mn";
 
 function _headers(token) {
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 }
 
-async function _withRetry(fn) {
-  try {
-    return await fn(await getToken());
-  } catch (err) {
-    if (err.response?.status === 401) return fn(await _refreshToken());
-    const msg = err.response?.data?.message || err.response?.data?.error || err.message;
-    throw new Error(msg);
-  }
-}
-
-// Subscription invoice үүсгэх
+// Subscription invoice үүсгэх → Mongol Agent-ийн өөрийн данс руу
 async function createInvoice({ orgId, plan, amount, description }) {
-  const invoiceCode = process.env.SUB_QPAY_INVOICE_CODE || "MONGOL_AGENT_INVOICE";
-  const apiUrl = process.env.API_URL || "https://api.mongolagent.mn";
+  const merchantId = process.env.PLATFORM_QPAY_MERCHANT_ID;
+  const bankCode   = process.env.PLATFORM_BANK_CODE   || "050000";
+  const accountNo  = process.env.PLATFORM_ACCOUNT_NUMBER;
+  const accountName= process.env.PLATFORM_ACCOUNT_NAME || "Пүрвээ Төрболд";
+  const apiUrl     = process.env.API_URL || "https://api.mongolagent.mn";
 
-  const body = {
-    invoice_code: invoiceCode,
-    sender_invoice_no: `${orgId.slice(-8)}-${Date.now()}`,
-    invoice_receiver_code: "terminal",
-    sender_branch_code: "MAIN",
-    invoice_description: description || `Mongol Agent — ${plan} план`,
-    amount: Math.round(amount),
-    callback_url: `${apiUrl}/webhook/sub-qpay/${orgId}`,
+  if (!merchantId) throw new Error("PLATFORM_QPAY_MERCHANT_ID env тохируулаагүй");
+  if (!accountNo)  throw new Error("PLATFORM_ACCOUNT_NUMBER env тохируулаагүй");
+
+  const token = await getToken();
+  const res = await axios.post(`${BASE_URL}/v2/invoice`, {
+    merchant_id:   merchantId,
+    branch_code:   "BRANCH_001",
+    amount:        Math.round(amount),
+    currency:      "MNT",
+    customer_name: "Mongol Agent",
+    customer_logo: "",
+    callback_url:  `${apiUrl}/webhook/sub-qpay/${orgId}`,
+    description:   description || `Mongol Agent — ${plan} план`,
+    mcc_code:      "",
+    bank_accounts: [{
+      account_bank_code: bankCode,
+      account_number:    accountNo,
+      account_name:      accountName,
+      is_default:        true,
+    }],
+  }, { headers: _headers(token) });
+
+  // QuickQR response-д: id (invoice_id), qr_code (qr_text), qr_image, urls
+  const d = res.data;
+  return {
+    invoice_id: d.id,
+    qr_text:    d.qr_code,
+    qr_image:   d.qr_image,
+    urls:       d.urls || [],
   };
-
-  return _withRetry((token) =>
-    axios.post(`${BASE_URL}/v2/invoice`, body, { headers: _headers(token) }).then((r) => r.data)
-  );
 }
 
 // Төлбөр шалгах
 async function checkPayment(invoiceId) {
-  return _withRetry((token) =>
-    axios.post(
-      `${BASE_URL}/v2/payment/check`,
-      { object_type: "INVOICE", object_id: invoiceId, offset: { page_number: 1, page_limit: 100 } },
-      { headers: _headers(token) }
-    ).then((r) => r.data)
+  const token = await getToken();
+  const res = await axios.post(
+    `${BASE_URL}/v2/payment/check`,
+    { invoice_id: invoiceId },
+    { headers: _headers(token) }
   );
+  return res.data;
 }
 
-module.exports = { getToken, createInvoice, checkPayment };
+module.exports = { createInvoice, checkPayment };
