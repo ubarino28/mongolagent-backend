@@ -590,26 +590,27 @@ ${INIT_BLOCK}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 — Клиент нэгэн зэрэг олон зүйл өгч болно — бүгдийг хүлээн ав, давтан асуухгүй
 — "Мэдэхгүй", "байхгүй" гэвэл алгасаж дараагийнхыг асуу
-— ТАНИХ асуулт болон 1️⃣-3️⃣ дуусвал tool дуудаж болно (4️⃣-7️⃣ заавал биш)
 — Төлбөрийн хэлбэр АСУУХГҮЙ
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-TOOL ДУУДАХ
+TOOL ДУУДАХ — АСУУЛТ БҮРИЙН ДАРАА ШУУД, ЖИЖИГ ХЭМЖЭЭГЭЭР
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-Мэдээлэл хангалттай болмогц ЗЭРЭГ дуудна:
-→ save_knowledge_items — цуглуулсан мэдээллээс Q&A хосуудыг гаргаж KB-д хадгалах
-→ save_business_profile — бүх профайл (system prompt + KB автоматаар үүснэ)
+🚨 ЗААВАЛ ДАГАХ ДҮРЭМ: 1️⃣-ээс 7️⃣ хүртэлх асуулт ТУС БҮРД нь хариулт авмагц ШУУДАА (дараагийн асуултыг асуухаасаа ӨМНӨ) тухайн ганц хариултыг save_knowledge_items функцээр ЯГ НЭГ Q&A зүйлтэйгээр дуудаж хадгал:
+   { question: "<асуултын утга>", answer: "<хэрэглэгчийн өгсөн хариулт>", category: "<тухайн асуултын сэдэв — жишээ нь 'Гол хэрэглэгч', 'Давуу тал', 'Үйлчилгээ ба үнэ', 'FAQ', 'Цаг захиалга', 'Төлбөр ба цуцлалт', 'AI зан чанар'>" }
+Ингэснээр мэдээлэл аажмаар, жижиг хэсгүүдээр найдвартай хадгалагдана. ХЭЗЭЭ Ч бүх 7 хариултыг ТӨГСГӨЛД нь нэг дор, том багцаар хадгалахгүй — том хариулт JSON хэлбэрээр үүсгэхэд тасарч KB-д огт орохгүй болох эрсдэлтэй.
+
+→ save_business_profile: ЗӨВХӨН 7️⃣-р асуултад хариулт авсны ДАРАА, бусад ямар ч tool-той ХАМТ биш, ДАНГААРАА нэг л удаа дуудна — компанийн бүрэн профайл, system prompt, AI persona-г үүсгэнэ.
 
 AI нэр: өгөөгүй бол компани нэрнээс үүсгэ ("Номин" → "Номин туслах")
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 ДУУСГАХ
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-Хадгалсны дараа яг ийм хариул:
+save_business_profile амжилттай дуудсаны дараа яг ийм хариул:
 "✅ Таны AI chatbot бэлэн боллоо!
 
 🤖 [aiName] — [company]-ийн AI зөвлөх
-📚 Мэдлэгийн санд [тоо] зүйл нэмэгдлээ
+📚 Мэдлэгийн сан бэлэн боллоо
 
 'AI Чат' хэсэгт орж туршиж үзнэ үү 🚀"
 
@@ -711,7 +712,7 @@ ${RESTART_BLOCK}`;
       tools: BUILDER_TOOLS,
       tool_choice: "auto",
       temperature: 0.3,
-      max_tokens: 1024,
+      max_tokens: 2048,
     });
 
     const choice = response.choices[0];
@@ -725,7 +726,14 @@ ${RESTART_BLOCK}`;
       const toolResults = [];
 
       for (const toolCall of toolCalls) {
-        const args = JSON.parse(toolCall.function.arguments);
+        let args;
+        try {
+          args = JSON.parse(toolCall.function.arguments);
+        } catch (parseErr) {
+          console.error(`Builder tool JSON.parse алдаа (${toolCall.function.name}):`, parseErr.message, "raw:", toolCall.function.arguments?.slice(0, 500));
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "JSON parse failed" }) });
+          continue;
+        }
 
         if (toolCall.function.name === "save_knowledge_items") {
           let created = 0, merged = 0;
