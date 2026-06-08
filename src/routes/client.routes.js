@@ -1209,7 +1209,7 @@ router.post("/chat", async (req, res) => {
           const { query } = JSON.parse(toolCall.function.arguments);
           const items = await prisma.turuuKnowledge.findMany({
             where: { orgId, active: true },
-            select: { question: true, answer: true },
+            select: { question: true, answer: true, category: true },
           });
           let result = "Мэдлэгийн санд тохирох мэдээлэл олдсонгүй.";
           if (items.length > 0) {
@@ -1217,7 +1217,7 @@ router.post("/chat", async (req, res) => {
             const scored = items
               .map((item) => ({
                 item,
-                score: qWords.filter((w) => normKB(`${item.question} ${item.answer}`).includes(w)).length,
+                score: qWords.filter((w) => normKB(`${item.question} ${item.answer} ${item.category || ""}`).includes(w)).length,
               }))
               .filter((s) => s.score > 0)
               .sort((a, b) => b.score - a.score)
