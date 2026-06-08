@@ -376,8 +376,12 @@ function mergeAnswers(existing, newAnswer) {
 // POST /client/settings/builder — Builder AI: бизнесийн мэдээллээс мэдлэгийн сан үүсгэнэ
 router.post("/settings/builder", async (req, res) => {
   try {
-    const { message, history = [] } = req.body;
+    const { message, history = [], imageUrl } = req.body;
     if (!message?.trim()) return res.status(400).json({ error: "message шаардлагатай" });
+
+    const userContent = imageUrl
+      ? `${message.trim()}\n\n[ХАВСАРГАСАН ЗУРАГНЫ URL: ${imageUrl}]`
+      : message.trim();
 
     const orgId = req.org.orgId;
     const prisma = getPrisma();
@@ -593,6 +597,11 @@ ${INIT_BLOCK}
 — Төлбөрийн хэлбэр АСУУХГҮЙ
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
+БҮТЭЭГДЭХҮҮНИЙ ЗУРАГ ХАВСАРГАХ
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Хэрэглэгчийн мессежийн төгсгөлд "[ХАВСАРГАСАН ЗУРАГНЫ URL: https://...]" гэсэн тэмдэглэгээ харагдвал — энэ бол тухайн мессежид дурдсан тодорхой бүтээгдэхүүн/бараанд хамаарах зураг. save_knowledge_items дуудахдаа яг тухайн барааны Q&A зүйлийн imageUrl талбарт энэ URL-г шууд хуулж оруул (бусад зүйлд бүү давхар оруул). Дараа нь хэрэглэгчид зургийг хүлээн авснаа эелдэгээр баталгаажуул, жишээ нь: "📸 Зургийг хүлээн авлаа — [бараа]-нд холбож хадгаллаа ✅".
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
 TOOL ДУУДАХ — АСУУЛТ БҮРИЙН ДАРАА ШУУД, ЖИЖИГ ХЭМЖЭЭГЭЭР
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 🚨 ЗААВАЛ ДАГАХ ДҮРЭМ: 1️⃣-ээс 7️⃣ хүртэлх асуулт ТУС БҮРД нь хариулт авмагц ШУУДАА (дараагийн асуултыг асуухаасаа ӨМНӨ) тухайн ганц хариултыг save_knowledge_items функцээр ЯГ НЭГ Q&A зүйлтэйгээр дуудаж хадгал:
@@ -633,6 +642,7 @@ ${RESTART_BLOCK}`;
                     question: { type: "string" },
                     answer:   { type: "string" },
                     category: { type: "string", description: "Жишээ: Бүтээгдэхүүн, Үнэ, Хүргэлт, Процесс, FAQ" },
+                    imageUrl: { type: "string", description: "Хэрэглэгчийн хавсаргасан барааны зургийн URL — зөвхөн тухайн зурагтай шууд холбоотой нэг зүйлд л оруулна, өгөгдөөгүй бол орхино" },
                   },
                   required: ["question", "answer", "category"],
                 },
@@ -703,7 +713,7 @@ ${RESTART_BLOCK}`;
     const messages = [
       { role: "system", content: BUILDER_SYSTEM },
       ...history.slice(-20),
-      { role: "user", content: message.trim() },
+      { role: "user", content: userContent },
     ];
 
     const response = await openai.chat.completions.create({
@@ -756,7 +766,7 @@ ${RESTART_BLOCK}`;
               const mergedAnswer = mergeAnswers(bestMatch.answer, item.answer);
               await prisma.turuuKnowledge.update({
                 where: { id: bestMatch.id },
-                data: { answer: mergedAnswer },
+                data: { answer: mergedAnswer, ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}) },
               });
               // currentKB-д шинэчилнэ (дараагийн item-д нөлөөлнө)
               bestMatch.answer = mergedAnswer;
@@ -764,7 +774,7 @@ ${RESTART_BLOCK}`;
             } else {
               // Шинэ KB үүсгэнэ
               const newItem = await prisma.turuuKnowledge.create({
-                data: { orgId, question: item.question, answer: item.answer, category: item.category || null },
+                data: { orgId, question: item.question, answer: item.answer, category: item.category || null, imageUrl: item.imageUrl || null },
               });
               currentKB.push({ id: newItem.id, question: item.question, answer: item.answer });
               created++;
