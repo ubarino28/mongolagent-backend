@@ -14,6 +14,16 @@ const router = express.Router();
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+function handleUploadError(err, req, res, next) {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "Зургийн хэмжээ хэтэрсэн байна (дээд тал нь 5MB)" });
+    }
+    return res.status(400).json({ error: "Файл хүлээн авахад алдаа гарлаа" });
+  }
+  next(err);
+}
+
 function getSupabase() {
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 }
@@ -276,10 +286,10 @@ router.get("/knowledge", async (req, res) => {
 // POST /client/knowledge
 router.post("/knowledge", async (req, res) => {
   try {
-    const { question, answer, category } = req.body;
+    const { question, answer, category, imageUrl } = req.body;
     if (!question || !answer) return res.status(400).json({ error: "question, answer шаардлагатай" });
     const prisma = getPrisma();
-    const item = await prisma.turuuKnowledge.create({ data: { orgId: req.org.orgId, question, answer, category } });
+    const item = await prisma.turuuKnowledge.create({ data: { orgId: req.org.orgId, question, answer, category, imageUrl: imageUrl || null } });
     res.json(item);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -287,13 +297,19 @@ router.post("/knowledge", async (req, res) => {
 // PUT /client/knowledge/:id
 router.put("/knowledge/:id", async (req, res) => {
   try {
-    const { question, answer, category, active } = req.body;
+    const { question, answer, category, active, imageUrl } = req.body;
     const prisma = getPrisma();
     const item = await prisma.turuuKnowledge.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
     if (!item) return res.status(404).json({ error: "Not found" });
     const updated = await prisma.turuuKnowledge.update({
       where: { id: req.params.id },
-      data: { ...(question && { question }), ...(answer && { answer }), ...(category !== undefined && { category }), ...(active !== undefined && { active }) },
+      data: {
+        ...(question && { question }),
+        ...(answer && { answer }),
+        ...(category !== undefined && { category }),
+        ...(active !== undefined && { active }),
+        ...(imageUrl !== undefined && { imageUrl: imageUrl || null }),
+      },
     });
     res.json(updated);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -320,7 +336,7 @@ router.delete("/knowledge", async (req, res) => {
 });
 
 // POST /client/upload — зураг Supabase Storage-д байршуулна
-router.post("/upload", upload.single("file"), async (req, res) => {
+router.post("/upload", upload.single("file"), handleUploadError, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "file шаардлагатай" });
     const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
@@ -1389,8 +1405,18 @@ router.delete("/unanswered/:id", async (req, res) => {
 
 const pdfUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+function handlePdfUploadError(err, req, res, next) {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "PDF файлын хэмжээ хэтэрсэн байна (дээд тал нь 10MB)" });
+    }
+    return res.status(400).json({ error: "Файл хүлээн авахад алдаа гарлаа" });
+  }
+  next(err);
+}
+
 // POST /client/upload/pdf — PDF-аас Q&A автоматаар гаргаж KB-д нэмнэ
-router.post("/upload/pdf", pdfUpload.single("file"), async (req, res) => {
+router.post("/upload/pdf", pdfUpload.single("file"), handlePdfUploadError, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "file шаардлагатай" });
     if (req.file.mimetype !== "application/pdf") return res.status(400).json({ error: "Зөвхөн PDF файл оруулна уу" });
