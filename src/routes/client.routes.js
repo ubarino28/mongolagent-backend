@@ -310,6 +310,15 @@ router.delete("/knowledge/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// DELETE /client/knowledge — бүх мэдлэгийн санг устгана (frontend-ийн "Дахин эхлүүлэх" товчинд)
+router.delete("/knowledge", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    await prisma.turuuKnowledge.deleteMany({ where: { orgId: req.org.orgId } });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /client/upload — зураг Supabase Storage-д байршуулна
 router.post("/upload", upload.single("file"), async (req, res) => {
   try {
