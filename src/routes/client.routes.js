@@ -347,11 +347,17 @@ router.post("/upload", upload.single("file"), handleUploadError, async (req, res
     const supabase = getSupabase();
 
     const { error } = await supabase.storage.from("turuuai-assets").upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+      console.error("[client/upload] Supabase storage error:", error.message);
+      return res.status(500).json({ error: "Зураг байршуулахад серверийн алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу." });
+    }
 
     const { data } = supabase.storage.from("turuuai-assets").getPublicUrl(filename);
     res.json({ url: data.publicUrl });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.error("[client/upload] Error:", e.message);
+    res.status(500).json({ error: "Зураг байршуулахад серверийн алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу." });
+  }
 });
 
 // PUT /client/profile/logo — компанийн лого шинэчилнэ
@@ -1462,7 +1468,10 @@ Category: Бүтээгдэхүүн | Үнэ | Хүргэлт | Процесс | 
       }
     }
     res.json({ ok: true, count: items.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.error("[client/upload/pdf] Error:", e.message);
+    res.status(500).json({ error: "PDF боловсруулахад серверийн алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу." });
+  }
 });
 
 // ─── FUNNEL ANALYTICS ────────────────────────────────────────────────────────
