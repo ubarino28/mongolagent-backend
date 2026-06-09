@@ -224,6 +224,19 @@ async function loadAISettings(orgId = null) {
   }
 }
 
+// psid тус бүрт processing queue — race condition запобігає
+const processingQueues = new Map();
+
+function queuedProcessMessage(psid, userText, orgId) {
+  if (!processingQueues.has(psid)) {
+    processingQueues.set(psid, Promise.resolve());
+  }
+  const next = processingQueues.get(psid).then(() => processMessage(psid, userText, orgId));
+  // Queue-г цэвэрлэх — хэтэрхий урт уламжлал хуримтлагдахгүй
+  processingQueues.set(psid, next.catch(() => {}));
+  return next;
+}
+
 async function processMessage(psid, userText, orgId = null) {
   const prisma = getPrisma();
 
@@ -404,4 +417,4 @@ async function processMessage(psid, userText, orgId = null) {
   return replyText;
 }
 
-module.exports = { processMessage };
+module.exports = { processMessage: queuedProcessMessage };
