@@ -459,6 +459,15 @@ router.post("/settings/builder", async (req, res) => {
 → Хэрэглэгч "Тийм", "за", "тийм ээ", "устга", "эхэл" гэх мэт ИЛТ ЗӨВШӨӨРСӨН хариулт өгсний ДАРАА Л clear_knowledge функцийг дуудна.
 → "Үгүй", "болих", "хэрэггүй", "болио" гэвэл clear_knowledge ХЭЗЭЭ Ч ДУУДАХГҮЙ — "Ойлголоо, тохиргоо хэвээрээ үлдлээ 👍" гэж хариулаад өөрчлөлт хийхгүй.`;
 
+    const STOCK_BLOCK = `━━━━━━━━━━━━━━━━━━━━━━━━━
+ҮЛДЭГДЭЛ ХАСАХ
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Хэрэглэгч "X-н нэг ширхэгийг хас", "X зарлаа", "stock хас", "нэгийг хас" гэх мэт хэлэхэд:
+→ decrement_stock функцийг дуудаж бодитоор хасна — save_knowledge_items ДУУДАХГҮЙ.
+→ ok: true → "✅ [бараа] [размер/өнгө] — хасагдлаа. Үлдэгдэл: [remaining]ш"
+→ ok: false → "⚠️ Тохирох бараа/variant олдсонгүй. Нэр, размер, өнгийг тодруулна уу."
+→ Баталгаажуулах асуулт АСУУХГҮЙ — decrement_stock шууд дуудна.`;
+
     let BUILDER_SYSTEM;
 
     if (existingKB.length >= 7) {
@@ -507,6 +516,8 @@ ${existingKBSummary}
 ✗ Нэг хариулт дотор 2+ асуулт асуухгүй
 ✗ Урт тайлбар, алхамлал, жагсаалт хийхгүй — 1-2 өгүүлбэр хангалттай
 ✗ "Хадгалъя уу?", "Зөв үү?" гэх баталгаажуулах асуулт — шууд хадгал
+
+${STOCK_BLOCK}
 
 ${RESTART_BLOCK}`;
     } else {
@@ -778,6 +789,23 @@ ${RESTART_BLOCK}`;
           parameters: { type: "object", properties: {} },
         },
       },
+      {
+        type: "function",
+        function: {
+          name: "decrement_stock",
+          description: "Бүтээгдэхүүний variant-ийн үлдэгдлийг хасна. Хэрэглэгч тухайн барааны нэг ширхэгийг зарлаа / хасаарай гэвэл дуудна.",
+          parameters: {
+            type: "object",
+            properties: {
+              productName: { type: "string", description: "Бүтээгдэхүүний нэр" },
+              color: { type: "string", description: "Өнгө (байвал)" },
+              size: { type: "string", description: "Размер (байвал)" },
+              quantity: { type: "number", description: "Хасах тоо (default 1)" },
+            },
+            required: ["productName"],
+          },
+        },
+      },
     ];
 
     const messages = [
@@ -909,6 +937,42 @@ ${RESTART_BLOCK}`;
           await prisma.turuuKnowledge.deleteMany({ where: { orgId } });
           cleared = true;
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true }) });
+        }
+
+        if (toolCall.function.name === "decrement_stock") {
+          const { productName, color, size, quantity = 1 } = args;
+          const allItems = await prisma.turuuKnowledge.findMany({
+            where: { orgId, active: true },
+            select: { id: true, question: true, variants: true },
+          });
+          let bestMatch = null, bestScore = 0;
+          for (const item of allItems) {
+            const pnWords = normKB(productName).split(" ").filter((w) => w.length > 1);
+            const score = pnWords.filter((w) => normKB(item.question).includes(w)).length;
+            if (score > bestScore) { bestScore = score; bestMatch = item; }
+          }
+          if (bestMatch && Array.isArray(bestMatch.variants) && bestMatch.variants.length > 0) {
+            let matched = false, newStock = null;
+            const newVariants = bestMatch.variants.map((v) => {
+              if (matched) return v;
+              const colorOk = !color || normKB(v.color || "").includes(normKB(color)) || normKB(color).includes(normKB(v.color || ""));
+              const sizeOk = !size || String(v.size || "").toLowerCase() === String(size).toLowerCase();
+              if (colorOk && sizeOk) {
+                matched = true;
+                newStock = Math.max(0, (v.stock || 0) - quantity);
+                return { ...v, stock: newStock };
+              }
+              return v;
+            });
+            if (matched) {
+              await prisma.turuuKnowledge.update({ where: { id: bestMatch.id }, data: { variants: newVariants } });
+              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, remaining: newStock, product: bestMatch.question }) });
+            } else {
+              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Тохирох variant олдсонгүй" }) });
+            }
+          } else {
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Бүтээгдэхүүн эсвэл variant олдсонгүй" }) });
+          }
         }
       }
 
@@ -1278,7 +1342,7 @@ router.post("/chat", async (req, res) => {
               result = scored.map((s) => {
                 let text = `А: ${s.item.question}\nХ: ${s.item.answer}`;
                 const vars = Array.isArray(s.item.variants) ? s.item.variants : [];
-                const colorSizes = vars.filter((v) => v.color || v.size).map((v) => [v.size, v.color].filter(Boolean).join("-"));
+                const colorSizes = vars.filter((v) => (v.color || v.size) && (v.stock == null || v.stock > 0)).map((v) => [v.size, v.color].filter(Boolean).join("-"));
                 if (colorSizes.length > 0) text += `\nХувилбарууд: ${colorSizes.join(", ")}`;
                 return text;
               }).join("\n\n");
