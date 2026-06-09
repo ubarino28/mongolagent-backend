@@ -1322,6 +1322,7 @@ router.post("/chat", async (req, res) => {
 
     const choice = response.choices[0];
     let reply = "";
+    let replyImageUrl = null;
 
     if (choice.finish_reason === "tool_calls") {
       const toolResults = [];
@@ -1330,7 +1331,7 @@ router.post("/chat", async (req, res) => {
           const { query } = JSON.parse(toolCall.function.arguments);
           const items = await prisma.turuuKnowledge.findMany({
             where: { orgId, active: true },
-            select: { question: true, answer: true, category: true, variants: true },
+            select: { question: true, answer: true, category: true, variants: true, imageUrl: true },
           });
           let result = "Мэдлэгийн санд тохирох мэдээлэл олдсонгүй.";
           if (items.length > 0) {
@@ -1344,6 +1345,8 @@ router.post("/chat", async (req, res) => {
               .sort((a, b) => b.score - a.score)
               .slice(0, 5);
             if (scored.length > 0) {
+              // Top result-ийн imageUrl-г хадгална
+              if (!replyImageUrl) replyImageUrl = scored[0].item.imageUrl || null;
               result = scored.map((s) => {
                 let text = `А: ${s.item.question}\nХ: ${s.item.answer}`;
                 const vars = Array.isArray(s.item.variants) ? s.item.variants : [];
@@ -1371,7 +1374,7 @@ router.post("/chat", async (req, res) => {
       reply = choice.message.content?.trim() || "";
     }
 
-    res.json({ reply });
+    res.json({ reply, ...(replyImageUrl ? { imageUrl: replyImageUrl } : {}) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
