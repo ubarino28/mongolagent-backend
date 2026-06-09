@@ -1342,7 +1342,7 @@ router.post("/chat", async (req, res) => {
               result = scored.map((s) => {
                 let text = `А: ${s.item.question}\nХ: ${s.item.answer}`;
                 const vars = Array.isArray(s.item.variants) ? s.item.variants : [];
-                const colorSizes = vars.filter((v) => v.color || v.size).map((v) => [v.size, v.color].filter(Boolean).join("-"));
+                const colorSizes = vars.filter((v) => (v.color || v.size) && (v.stock == null || v.stock > 0)).map((v) => [v.size, v.color].filter(Boolean).join("-"));
                 if (colorSizes.length > 0) text += `\nХувилбарууд: ${colorSizes.join(", ")}`;
                 return text;
               }).join("\n\n");
