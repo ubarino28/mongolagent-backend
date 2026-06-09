@@ -286,10 +286,12 @@ router.get("/knowledge", async (req, res) => {
 // POST /client/knowledge
 router.post("/knowledge", async (req, res) => {
   try {
-    const { question, answer, category, imageUrl } = req.body;
+    const { question, answer, category, imageUrl, variants } = req.body;
     if (!question || !answer) return res.status(400).json({ error: "question, answer шаардлагатай" });
     const prisma = getPrisma();
-    const item = await prisma.turuuKnowledge.create({ data: { orgId: req.org.orgId, question, answer, category, imageUrl: imageUrl || null } });
+    const item = await prisma.turuuKnowledge.create({
+      data: { orgId: req.org.orgId, question, answer, category, imageUrl: imageUrl || null, variants: variants ?? null },
+    });
     res.json(item);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -297,7 +299,7 @@ router.post("/knowledge", async (req, res) => {
 // PUT /client/knowledge/:id
 router.put("/knowledge/:id", async (req, res) => {
   try {
-    const { question, answer, category, active, imageUrl } = req.body;
+    const { question, answer, category, active, imageUrl, variants } = req.body;
     const prisma = getPrisma();
     const item = await prisma.turuuKnowledge.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
     if (!item) return res.status(404).json({ error: "Not found" });
@@ -309,6 +311,7 @@ router.put("/knowledge/:id", async (req, res) => {
         ...(category !== undefined && { category }),
         ...(active !== undefined && { active }),
         ...(imageUrl !== undefined && { imageUrl: imageUrl || null }),
+        ...(variants !== undefined && { variants: variants ?? null }),
       },
     });
     res.json(updated);
@@ -1265,7 +1268,7 @@ router.post("/chat", async (req, res) => {
           const { query } = JSON.parse(toolCall.function.arguments);
           const items = await prisma.turuuKnowledge.findMany({
             where: { orgId, active: true },
-            select: { question: true, answer: true, category: true },
+            select: { question: true, answer: true, category: true, variants: true },
           });
           let result = "Мэдлэгийн санд тохирох мэдээлэл олдсонгүй.";
           if (items.length > 0) {
@@ -1279,7 +1282,13 @@ router.post("/chat", async (req, res) => {
               .sort((a, b) => b.score - a.score)
               .slice(0, 5);
             if (scored.length > 0) {
-              result = scored.map((s) => `А: ${s.item.question}\nХ: ${s.item.answer}`).join("\n\n");
+              result = scored.map((s) => {
+                let text = `А: ${s.item.question}\nХ: ${s.item.answer}`;
+                const vars = Array.isArray(s.item.variants) ? s.item.variants : [];
+                const colorSizes = vars.filter((v) => v.color || v.size).map((v) => [v.size, v.color].filter(Boolean).join("-"));
+                if (colorSizes.length > 0) text += `\nХувилбарууд: ${colorSizes.join(", ")}`;
+                return text;
+              }).join("\n\n");
             }
           }
           toolResults.push({ tool_call_id: toolCall.id, content: result });
