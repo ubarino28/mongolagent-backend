@@ -9,6 +9,19 @@ const clientRouter = require("./routes/client.routes");
 
 const app = express();
 
+// Auto-migrate: ensure new columns exist without dropping data
+const { getPrisma } = require("./lib/db");
+(async () => {
+  try {
+    const prisma = getPrisma();
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "TuruuKnowledge" ADD COLUMN IF NOT EXISTS "variants" JSONB`
+    );
+  } catch (e) {
+    console.warn("[migration] variants column:", e.message);
+  }
+})();
+
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3001",
