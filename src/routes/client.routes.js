@@ -1196,7 +1196,7 @@ router.post("/billing/pay/check", async (req, res) => {
 // POST /client/chat
 router.post("/chat", async (req, res) => {
   try {
-    const { message, history = [] } = req.body;
+    const { message, history = [], imageUrl } = req.body;
     if (!message?.trim()) return res.status(400).json({ error: "message шаардлагатай" });
 
     const orgId = req.org.orgId;
@@ -1236,10 +1236,14 @@ router.post("/chat", async (req, res) => {
       },
     ];
 
+    const userContent = imageUrl
+      ? [{ type: "image_url", image_url: { url: imageUrl } }, { type: "text", text: message.trim() }]
+      : message.trim();
+
     const messages = [
       { role: "system", content: systemPrompt },
       ...history.slice(-20),
-      { role: "user", content: message.trim() },
+      { role: "user", content: userContent },
     ];
 
     const response = await openai.chat.completions.create({
