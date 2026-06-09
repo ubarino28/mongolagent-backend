@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "db:push": "DATABASE_URL=\"$(echo $DATABASE_URL | sed 's/:6543/:5432/g')\" npx prisma db push --accept-data-loss",
+    "db:push": "DATABASE_URL=\"$(echo $DATABASE_URL | sed 's/:6543/:5432/g')\" npx prisma db push",
     "db:generate": "npx prisma generate"
   },
   "dependencies": {
