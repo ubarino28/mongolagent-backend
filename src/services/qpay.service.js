@@ -14,8 +14,7 @@ async function getToken() {
   const password = process.env.QPAY_PASSWORD;
   if (!username || !password) throw new Error("QPAY_USERNAME / QPAY_PASSWORD env тохируулаагүй");
 
-  const body = {};
-  if (process.env.QPAY_TERMINAL_ID) body.terminal_id = process.env.QPAY_TERMINAL_ID;
+  const body = { terminal_id: process.env.QPAY_TERMINAL_ID || username };
 
   const res = await axios.post(`${BASE_URL}/v2/auth/token`, body, {
     auth: { username, password },
