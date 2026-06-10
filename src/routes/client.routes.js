@@ -1717,6 +1717,24 @@ router.post("/profile/qpay/register", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /client/profile/qpay/cities — QPay хот/аймгийн жагсаалт
+router.get("/profile/qpay/cities", async (req, res) => {
+  try {
+    const qpay = require("../services/qpay.service");
+    const result = await qpay.getCities();
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /client/profile/qpay/districts/:cityCode — QPay дүүрэг/сумын жагсаалт
+router.get("/profile/qpay/districts/:cityCode", async (req, res) => {
+  try {
+    const qpay = require("../services/qpay.service");
+    const result = await qpay.getDistricts(req.params.cityCode);
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /client/profile/qpay/merchant — QPay-аас merchant мэдээлэл авах
 router.get("/profile/qpay/merchant", async (req, res) => {
   try {

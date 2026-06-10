@@ -83,6 +83,20 @@ async function listMerchants({ page = 1, limit = 20 } = {}) {
   );
 }
 
+// Хот/аймгийн жагсаалт
+async function getCities() {
+  return _withRetry((token) =>
+    axios.get(`${BASE_URL}/v2/aimaghot`, { headers: _authHeaders(token) }).then((r) => r.data)
+  );
+}
+
+// Дүүрэг/сумын жагсаалт
+async function getDistricts(cityCode) {
+  return _withRetry((token) =>
+    axios.get(`${BASE_URL}/v2/sumduureg/${cityCode}`, { headers: _authHeaders(token) }).then((r) => r.data)
+  );
+}
+
 // ─── Invoice ─────────────────────────────────────────────────────────────────
 
 /**
@@ -179,6 +193,8 @@ module.exports = {
   createMerchantPerson,
   getMerchant,
   listMerchants,
+  getCities,
+  getDistricts,
   createInvoice,
   getInvoice,
   checkPayment,
