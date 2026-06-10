@@ -126,7 +126,15 @@ async function createInvoice({ merchantId, branchCode, amount, description, cust
   };
 
   return _withRetry((token) =>
-    axios.post(`${BASE_URL}/v2/invoice`, body, { headers: _authHeaders(token) }).then((r) => r.data)
+    axios.post(`${BASE_URL}/v2/invoice`, body, { headers: _authHeaders(token) }).then((r) => {
+      const d = r.data;
+      return {
+        invoice_id: d.id,
+        qr_text: d.qr_code,
+        qr_image: d.qr_image,
+        urls: d.urls || [],
+      };
+    })
   );
 }
 

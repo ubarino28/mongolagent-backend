@@ -89,7 +89,7 @@ router.post("/qpay/:orderId", async (req, res) => {
       if (!order?.qpayInvoiceId || order.qpayStatus === "PAID") return;
 
       const result = await checkPayment(order.qpayInvoiceId);
-      const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+      const paid = result.invoice_status === "PAID";
       if (!paid) return;
 
       await prisma.turuuOrder.update({
