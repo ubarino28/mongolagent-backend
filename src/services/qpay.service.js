@@ -163,8 +163,8 @@ function buildPaymentMessage(invoiceResult, amount, orderRef) {
 // Монголын банкны кодууд (dashboard-д select болгоход)
 const BANK_CODES = [
   { code: "050000", name: "Хаан банк" },
-  { code: "040000", name: "Голомт банк" },
-  { code: "150000", name: "ТДБ (Trade and Development Bank)" },
+  { code: "150000", name: "Голомт банк" },
+  { code: "040000", name: "ТДБ (Trade and Development Bank)" },
   { code: "290000", name: "М банк" },
   { code: "320000", name: "ХасБанк (XacBank)" },
   { code: "160000", name: "Төрийн банк" },

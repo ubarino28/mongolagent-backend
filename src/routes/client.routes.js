@@ -1245,7 +1245,7 @@ router.post("/billing/pay/check", async (req, res) => {
 
     const subQpay = require("../services/subscription-qpay.service");
     const result = await subQpay.checkPayment(org.subInvoiceId);
-    const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+    const paid = result.invoice_status === "PAID";
 
     if (paid && org.subQpayStatus !== "PAID") {
       await prisma.organization.update({
@@ -1796,8 +1796,7 @@ router.post("/orders/:id/check-payment", async (req, res) => {
     const qpay = require("../services/qpay.service");
     const result = await qpay.checkPayment(order.qpayInvoiceId);
 
-    // count > 0 эсвэл payment_status === "PAID" бол төлсөн
-    const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+    const paid = result.invoice_status === "PAID";
 
     if (paid && order.qpayStatus !== "PAID") {
       await prisma.turuuOrder.update({
