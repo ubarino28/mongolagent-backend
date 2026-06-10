@@ -354,6 +354,7 @@ router.get("/organizations", async (req, res) => {
           createdAt: true, updatedAt: true,
           fbPageId: true, logoUrl: true,
           qpayMerchantId: true, qpayAccountNumber: true, qpayBankCode: true,
+          subInvoiceId: true, subQpayStatus: true,
         },
       }),
       prisma.organization.count({ where }),
@@ -667,6 +668,48 @@ router.get("/users", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// GET /admin/billing — Subscription QPay төлбөрүүдийн жагсаалт
+router.get("/billing", async (req, res) => {
+  try {
+    const { status, page = 1 } = req.query;
+    const take = 30;
+    const skip = (Number(page) - 1) * take;
+    const prisma = getPrisma();
+
+    const where = {};
+    if (status === "PAID")    where.subQpayStatus = "PAID";
+    if (status === "PENDING") where.subQpayStatus = "PENDING";
+    if (status === "none")    where.subInvoiceId = null;
+
+    const [orgs, total, stats] = await Promise.all([
+      prisma.organization.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        take, skip,
+        select: {
+          id: true, name: true, email: true, plan: true,
+          subscriptionEndsAt: true, updatedAt: true,
+          subInvoiceId: true, subQpayStatus: true,
+        },
+      }),
+      prisma.organization.count({ where }),
+      Promise.all([
+        prisma.organization.count({ where: { subQpayStatus: "PAID" } }),
+        prisma.organization.count({ where: { subQpayStatus: "PENDING" } }),
+        prisma.organization.count({ where: { subInvoiceId: null } }),
+        prisma.organization.count(),
+      ]),
+    ]);
+
+    const [paid, pending, noInvoice, total_] = stats;
+    res.json({
+      data: orgs, total,
+      page: Number(page), pages: Math.ceil(total / take),
+      stats: { paid, pending, noInvoice, total: total_ },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 module.exports = router;
