@@ -465,13 +465,20 @@ router.post("/settings/builder", async (req, res) => {
 → "Үгүй", "болих", "хэрэггүй", "болио" гэвэл clear_knowledge ХЭЗЭЭ Ч ДУУДАХГҮЙ — "Ойлголоо, тохиргоо хэвээрээ үлдлээ 👍" гэж хариулаад өөрчлөлт хийхгүй.`;
 
     const STOCK_BLOCK = `━━━━━━━━━━━━━━━━━━━━━━━━━
-ҮЛДЭГДЭЛ ХАСАХ
+ҮЛДЭГДЭЛ ХАСАХ / НЭМЭХ
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 Хэрэглэгч "X-н нэг ширхэгийг хас", "X зарлаа", "stock хас", "нэгийг хас" гэх мэт хэлэхэд:
 → decrement_stock функцийг дуудаж бодитоор хасна — save_knowledge_items ДУУДАХГҮЙ.
 → ok: true → "✅ [бараа] [размер/өнгө] — хасагдлаа. Үлдэгдэл: [remaining]ш"
 → ok: false → "⚠️ Тохирох бараа/variant олдсонгүй. Нэр, размер, өнгийг тодруулна уу."
-→ Баталгаажуулах асуулт АСУУХГҮЙ — decrement_stock шууд дуудна.`;
+
+Хэрэглэгч "X-г нийт үлдэгдэл дээр нэм", "X ширхэг ирлээ", "нөөц нэмэгдлээ" гэх мэт хэлэхэд:
+→ increment_stock функцийг дуудаж бодитоор нэмнэ — save_knowledge_items ДУУДАХГҮЙ.
+→ ok: true → "✅ [бараа] [размер/өнгө] — нэмэгдлээ. Үлдэгдэл: [remaining]ш"
+→ ok: false → "⚠️ Тохирох бараа/variant олдсонгүй. Нэр, размер, өнгийг тодруулна уу."
+
+→ Аль ч тохиолдолд баталгаажуулах асуулт АСУУХГҮЙ — функцийг шууд дуудна.
+🚫 Хэрэглэгчийн хүсэлтэд тохирох tool (decrement_stock / increment_stock / save_knowledge_items гэх мэт) ОЛДОХГҮЙ бол ХЭЗЭЭ Ч save_knowledge_items-г ойролцоо/санаатай мэдээллээр бүү дуудаарай — зүгээр "Уучлаарай, энэ үйлдлийг одоогоор дэмжихгүй байна" гэх мэт байгалийн хариу өг.`;
 
     let BUILDER_SYSTEM;
 
@@ -811,6 +818,23 @@ ${RESTART_BLOCK}`;
           },
         },
       },
+      {
+        type: "function",
+        function: {
+          name: "increment_stock",
+          description: "Бүтээгдэхүүний variant-ийн үлдэгдлийг нэмэгдүүлнэ. Хэрэглэгч 'нийт үлдэгдэл дээр нэм', 'X ширхэг ирлээ' гэх мэт хэлэхэд дуудна.",
+          parameters: {
+            type: "object",
+            properties: {
+              productName: { type: "string", description: "Бүтээгдэхүүний нэр" },
+              color: { type: "string", description: "Өнгө (байвал)" },
+              size: { type: "string", description: "Размер (байвал)" },
+              quantity: { type: "number", description: "Нэмэх тоо (default 1)" },
+            },
+            required: ["productName"],
+          },
+        },
+      },
     ];
 
     const messages = [
@@ -856,7 +880,9 @@ ${RESTART_BLOCK}`;
           });
 
           for (const item of args.items) {
-            // Ижил утгатай KB хайна (60%+ word overlap)
+            // Ижил утгатай KB хайна (60%+ word overlap). Зурагтай зүйлд threshold-ыг өндөрсгөж,
+            // өөр бараа руу санамсаргүй merge хийгдэхээс сэргийлнэ — зураг бүр өөрийн KB зүйлтэй холбогддог.
+            const mergeThreshold = item.imageUrl ? 0.85 : 0.6;
             let bestMatch = null;
             let bestScore = 0;
             for (const kb of currentKB) {
@@ -864,12 +890,16 @@ ${RESTART_BLOCK}`;
               if (score > bestScore) { bestScore = score; bestMatch = kb; }
             }
 
-            if (bestMatch && bestScore >= 0.6) {
+            if (bestMatch && bestScore >= mergeThreshold) {
               // Байгаа KB-тэй нэгтгэнэ
               const mergedAnswer = mergeAnswers(bestMatch.answer, item.answer);
               await prisma.turuuKnowledge.update({
                 where: { id: bestMatch.id },
-                data: { answer: mergedAnswer, ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}) },
+                data: {
+                  answer: mergedAnswer,
+                  ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}),
+                  ...(item.category ? { category: item.category } : {}),
+                },
               });
               // currentKB-д шинэчилнэ (дараагийн item-д нөлөөлнө)
               bestMatch.answer = mergedAnswer;
@@ -965,6 +995,42 @@ ${RESTART_BLOCK}`;
               if (colorOk && sizeOk) {
                 matched = true;
                 newStock = Math.max(0, (v.stock || 0) - quantity);
+                return { ...v, stock: newStock };
+              }
+              return v;
+            });
+            if (matched) {
+              await prisma.turuuKnowledge.update({ where: { id: bestMatch.id }, data: { variants: newVariants } });
+              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, remaining: newStock, product: bestMatch.question }) });
+            } else {
+              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Тохирох variant олдсонгүй" }) });
+            }
+          } else {
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Бүтээгдэхүүн эсвэл variant олдсонгүй" }) });
+          }
+        }
+
+        if (toolCall.function.name === "increment_stock") {
+          const { productName, color, size, quantity = 1 } = args;
+          const allItems = await prisma.turuuKnowledge.findMany({
+            where: { orgId, active: true },
+            select: { id: true, question: true, variants: true },
+          });
+          let bestMatch = null, bestScore = 0;
+          for (const item of allItems) {
+            const pnWords = normKB(productName).split(" ").filter((w) => w.length > 1);
+            const score = pnWords.filter((w) => normKB(item.question).includes(w)).length;
+            if (score > bestScore) { bestScore = score; bestMatch = item; }
+          }
+          if (bestMatch && Array.isArray(bestMatch.variants) && bestMatch.variants.length > 0) {
+            let matched = false, newStock = null;
+            const newVariants = bestMatch.variants.map((v) => {
+              if (matched) return v;
+              const colorOk = !color || normKB(v.color || "").includes(normKB(color)) || normKB(color).includes(normKB(v.color || ""));
+              const sizeOk = !size || String(v.size || "").toLowerCase() === String(size).toLowerCase();
+              if (colorOk && sizeOk) {
+                matched = true;
+                newStock = (v.stock || 0) + quantity;
                 return { ...v, stock: newStock };
               }
               return v;
