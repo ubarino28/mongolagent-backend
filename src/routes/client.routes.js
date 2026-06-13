@@ -392,6 +392,22 @@ function kbSimilarity(a, b) {
   return union > 0 ? intersection / union : 0;
 }
 
+// decrement_stock/increment_stock-д ашиглах бараа хайлт — "Jordan 1" мэт нэг оронтой
+// тоо агуулсан нэрсийг "Jordan 1 Low"/"Jordan 1 High"-аас ялгахын тулд digit токеныг хадгална.
+function productWords(s) {
+  return new Set(
+    normKB(s).split(" ").filter((w) => w.length > 1 || /^\d+$/.test(w))
+  );
+}
+
+function productSimilarity(a, b) {
+  const wa = productWords(a);
+  const wb = productWords(b);
+  const intersection = [...wa].filter((w) => wb.has(w)).length;
+  const union = new Set([...wa, ...wb]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
 function mergeAnswers(existing, newAnswer) {
   // Маш ижил бол урт нь дэлгэрэнгүйг нь ав
   if (kbSimilarity(existing, newAnswer) >= 0.7) {
@@ -421,11 +437,20 @@ router.post("/settings/builder", async (req, res) => {
     // Одоо байгаа KB-г ачаалж Builder-д мэдүүлнэ
     const existingKB = await prisma.turuuKnowledge.findMany({
       where: { orgId },
-      select: { id: true, question: true, answer: true },
+      select: { id: true, question: true, answer: true, variants: true },
     });
 
     const existingKBSummary = existingKB.length > 0
-      ? existingKB.map((k) => `— ${k.question}: ${k.answer.slice(0, 80)}${k.answer.length > 80 ? "..." : ""}`).join("\n")
+      ? existingKB.map((k) => {
+          let line = `— ${k.question}: ${k.answer.slice(0, 80)}${k.answer.length > 80 ? "..." : ""}`;
+          if (Array.isArray(k.variants) && k.variants.length > 0) {
+            const variantStr = k.variants
+              .map((v) => `${v.size || ""}${v.size && v.color ? "/" : ""}${v.color || ""}: ${v.stock ?? 0}ш`)
+              .join(", ");
+            line += `\n   variants: ${variantStr}`;
+          }
+          return line;
+        }).join("\n")
       : "Хоосон";
 
     const INIT_BLOCK = existingKB.length === 0
@@ -477,6 +502,10 @@ router.post("/settings/builder", async (req, res) => {
 → ok: true → "✅ [бараа] [размер/өнгө] — нэмэгдлээ. Үлдэгдэл: [remaining]ш"
 → ok: false → "⚠️ Тохирох бараа/variant олдсонгүй. Нэр, размер, өнгийг тодруулна уу."
 
+→ Tool result-д "ambiguous: true" ирвэл — энэ нэрэнд тохирох ХЭДЭН бараа байгаа тул аль нь болохыг шийдэж чадахгүй байна гэсэн үг. "candidates" жагсаалтыг хэрэглэгчид харуулж "Аль бараа вэ — [candidates]?" гэж тодруулах асуулт асуу. ДАХИН decrement_stock/increment_stock бүү дуудаарай — хэрэглэгчийн хариултыг хүлээ.
+
+→ Дээрх "ОДОО БАЙГАА МЭДЛЭГИЙН САН"-д variants (размер/өнгө/үлдэгдэл) харагдаж байгаа — "бүх размер/өнгө дээр нэм/хас" гэх мэт хүсэлтэд ЗӨВХӨН дээрх жагсаалтад бодитоор байгаа variant-уудаар л increment_stock/decrement_stock-г дуудна (таамаглаж бусад размер бүү үүсгэ).
+
 → Аль ч тохиолдолд баталгаажуулах асуулт АСУУХГҮЙ — функцийг шууд дуудна.
 🚫 Хэрэглэгчийн хүсэлтэд тохирох tool (decrement_stock / increment_stock / save_knowledge_items гэх мэт) ОЛДОХГҮЙ бол ХЭЗЭЭ Ч save_knowledge_items-г ойролцоо/санаатай мэдээллээр бүү дуудаарай — зүгээр "Уучлаарай, энэ үйлдлийг одоогоор дэмжихгүй байна" гэх мэт байгалийн хариу өг.`;
 
@@ -510,6 +539,11 @@ ${existingKBSummary}
 
 В. Шинэ утга өгсөн (эсвэл Б-ийн хариулт):
 → save_knowledge_items дуудаж хадгал.
+→ 🏷️ CATEGORY ШИЙДВЭР (заавал дагах):
+   • Хэрэв энэ бол тодорхой БҮТЭЭГДЭХҮҮН/БАРАА тухай мэдээлэл (нэр + үнэ/размер/өнгө/зураг зэрэг тодорхой нэг бараанд хамаарах) бол category-г ЗААВАЛ "Бүтээгдэхүүн / <дэд ангилал>" хэлбэрээр бич.
+   • <дэд ангилал>-ыг ЗААВАЛ Монгол КИРИЛЛ бичгээр бич — хэрэглэгч латин үсгээр ("tsamts", "gutal") бичсэн ч кирилл рүү хөрвүүлж бич ("Цамц", "Гутал").
+   • Дээрх "ОДОО БАЙГАА МЭДЛЭГИЙН САН"-д "Бүтээгдэхүүн / ..." эхэлсэн ижил төстэй дэд ангилал байвал яг тэр нэрийг давтан ашигла — шинэ хувилбар (өөр бичигдэлтэй ижил утгатай) бүү үүсгэ.
+   • Бизнесийн ерөнхий мэдээлэл (компани, хүргэлт, цаг, FAQ, бодлого г.м.) бол "Бүтээгдэхүүн / ..." АШИГЛАХГҮЙ — ердийн category (Компани, Хүргэлт, FAQ г.м.) ашигла.
 → KB-д ижил сэдвийн зүйл байвал — тэр зүйлийн question текстийг ашигла (overlap ихснэ → шинэчлэгдэнэ).
 → Tool result-д merged > 0 → "Солигдлоо ✅"
 → Tool result-д created > 0 → "Нэмэгдлээ ✅"
@@ -974,75 +1008,53 @@ ${RESTART_BLOCK}`;
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true }) });
         }
 
-        if (toolCall.function.name === "decrement_stock") {
+        if (toolCall.function.name === "decrement_stock" || toolCall.function.name === "increment_stock") {
           const { productName, color, size, quantity = 1 } = args;
           const allItems = await prisma.turuuKnowledge.findMany({
             where: { orgId, active: true },
             select: { id: true, question: true, variants: true },
           });
-          let bestMatch = null, bestScore = 0;
-          for (const item of allItems) {
-            const pnWords = normKB(productName).split(" ").filter((w) => w.length > 1);
-            const score = pnWords.filter((w) => normKB(item.question).includes(w)).length;
-            if (score > bestScore) { bestScore = score; bestMatch = item; }
-          }
-          if (bestMatch && Array.isArray(bestMatch.variants) && bestMatch.variants.length > 0) {
-            let matched = false, newStock = null;
-            const newVariants = bestMatch.variants.map((v) => {
-              if (matched) return v;
-              const colorOk = !color || normKB(v.color || "").includes(normKB(color)) || normKB(color).includes(normKB(v.color || ""));
-              const sizeOk = !size || String(v.size || "").toLowerCase() === String(size).toLowerCase();
-              if (colorOk && sizeOk) {
-                matched = true;
-                newStock = Math.max(0, (v.stock || 0) - quantity);
-                return { ...v, stock: newStock };
-              }
-              return v;
-            });
-            if (matched) {
-              await prisma.turuuKnowledge.update({ where: { id: bestMatch.id }, data: { variants: newVariants } });
-              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, remaining: newStock, product: bestMatch.question }) });
-            } else {
-              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Тохирох variant олдсонгүй" }) });
-            }
-          } else {
-            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Бүтээгдэхүүн эсвэл variant олдсонгүй" }) });
-          }
-        }
 
-        if (toolCall.function.name === "increment_stock") {
-          const { productName, color, size, quantity = 1 } = args;
-          const allItems = await prisma.turuuKnowledge.findMany({
-            where: { orgId, active: true },
-            select: { id: true, question: true, variants: true },
-          });
-          let bestMatch = null, bestScore = 0;
-          for (const item of allItems) {
-            const pnWords = normKB(productName).split(" ").filter((w) => w.length > 1);
-            const score = pnWords.filter((w) => normKB(item.question).includes(w)).length;
-            if (score > bestScore) { bestScore = score; bestMatch = item; }
-          }
-          if (bestMatch && Array.isArray(bestMatch.variants) && bestMatch.variants.length > 0) {
-            let matched = false, newStock = null;
-            const newVariants = bestMatch.variants.map((v) => {
-              if (matched) return v;
-              const colorOk = !color || normKB(v.color || "").includes(normKB(color)) || normKB(color).includes(normKB(v.color || ""));
-              const sizeOk = !size || String(v.size || "").toLowerCase() === String(size).toLowerCase();
-              if (colorOk && sizeOk) {
-                matched = true;
-                newStock = (v.stock || 0) + quantity;
-                return { ...v, stock: newStock };
-              }
-              return v;
-            });
-            if (matched) {
-              await prisma.turuuKnowledge.update({ where: { id: bestMatch.id }, data: { variants: newVariants } });
-              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, remaining: newStock, product: bestMatch.question }) });
-            } else {
-              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Тохирох variant олдсонгүй" }) });
-            }
+          const scored = allItems
+            .map((item) => ({ item, score: productSimilarity(productName, item.question) }))
+            .filter((s) => s.score > 0)
+            .sort((a, b) => b.score - a.score);
+
+          if (scored.length === 0) {
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Бүтээгдэхүүн олдсонгүй" }) });
           } else {
-            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Бүтээгдэхүүн эсвэл variant олдсонгүй" }) });
+            const topScore = scored[0].score;
+            const topCandidates = scored.filter((s) => s.score === topScore);
+
+            if (topScore < 1 && topCandidates.length > 1) {
+              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, ambiguous: true, candidates: topCandidates.map((c) => c.item.question) }) });
+            } else {
+              const bestMatch = topCandidates[0].item;
+              if (Array.isArray(bestMatch.variants) && bestMatch.variants.length > 0) {
+                let matched = false, newStock = null;
+                const newVariants = bestMatch.variants.map((v) => {
+                  if (matched) return v;
+                  const colorOk = !color || normKB(v.color || "").includes(normKB(color)) || normKB(color).includes(normKB(v.color || ""));
+                  const sizeOk = !size || String(v.size || "").toLowerCase() === String(size).toLowerCase();
+                  if (colorOk && sizeOk) {
+                    matched = true;
+                    newStock = toolCall.function.name === "decrement_stock"
+                      ? Math.max(0, (v.stock || 0) - quantity)
+                      : (v.stock || 0) + quantity;
+                    return { ...v, stock: newStock };
+                  }
+                  return v;
+                });
+                if (matched) {
+                  await prisma.turuuKnowledge.update({ where: { id: bestMatch.id }, data: { variants: newVariants } });
+                  toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, remaining: newStock, product: bestMatch.question }) });
+                } else {
+                  toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Тохирох variant олдсонгүй" }) });
+                }
+              } else {
+                toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: "Бүтээгдэхүүн эсвэл variant олдсонгүй" }) });
+              }
+            }
           }
         }
       }
