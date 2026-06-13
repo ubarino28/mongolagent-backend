@@ -1,7 +1,7 @@
 "use strict";
 const { getPrisma } = require("./db");
 
-const MAX_MESSAGES = 20;
+const MAX_MESSAGES = 40; // ~20 харилцан яриа (нэг захиалгад хангалттай)
 const HISTORY_TTL_MS = 6 * 60 * 60 * 1000; // 6 цаг идэвхгүй бол хуучин түүхийг мартаж шинэ яриа гэж үзнэ
 
 function isStale(row) {

@@ -417,4 +417,85 @@ async function processMessage(psid, userText, orgId = null) {
   return replyText;
 }
 
-module.exports = { processMessage: queuedProcessMessage };
+// Хэрэглэгчийн явуулсан төлбөрийн баримт (screenshot) зургийг боловсруулна:
+// зураг дээрх шилжүүлсэн дүнг таниж, хэрэглэгчийн сүүлийн "PAID" болоогүй
+// захиалгын нийт дүнтэй тулгаж тааруулна.
+async function processReceiptImage(psid, imageUrl, orgId = null) {
+  const prisma = getPrisma();
+
+  const order = await prisma.turuuOrder.findFirst({
+    where: { psid, orgId, status: { not: "PAID" } },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!order) {
+    return "Уучлаарай, танай захиалгын мэдээлэл олдсонгүй 😔 Манай ажилтантай шууд холбогдоно уу.";
+  }
+
+  let extractedAmount = 0;
+  try {
+    const response = await getOpenAI().chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Энэ бол банкны шилжүүлгийн баримт/screenshot. Зурган дээрх ШИЛЖҮҮЛСЭН ДҮНГИЙН тоог ЗӨВХӨН бүхэл тоо хэлбэрээр хариул (мөнгөн тэмдэгт, таслал, зай бүгдийг арилга). Дүн олдохгүй бол 0 гэж хариул." },
+            { type: "image_url", image_url: { url: imageUrl } },
+          ],
+        },
+      ],
+      max_tokens: 20,
+      temperature: 0,
+    });
+    const text = response.choices[0]?.message?.content?.trim() || "0";
+    extractedAmount = parseInt(text.replace(/[^\d]/g, ""), 10) || 0;
+  } catch (err) {
+    console.error("[receipt OCR]", err.message);
+  }
+
+  const expected = Math.round(order.totalAmount || 0);
+  const orderCode = order.id.slice(-6).toUpperCase();
+  let replyText;
+  let amountMatches = false;
+
+  // ⚠️ Дансаар төлбөрийг AI автоматаар "PAID" болгохгүй — зөвхөн QPay л автоматаар баталгаажина.
+  // Дансаар бол энд зөвхөн дүнг танин таалцаж, admin-д ШАЛГУУЛАХААР мэдэгдэнэ.
+  if (extractedAmount > 0 && extractedAmount >= expected) {
+    amountMatches = true;
+    replyText = `📸 Баримтыг хүлээн авлаа! Захиалга #${orderCode} (${expected.toLocaleString()}₮)-ийн дүн тохирч байна — манай ажилтан баталгаажуулсны дараа захиалгыг баталгаажуулна 🙏`;
+  } else if (extractedAmount > 0) {
+    replyText = `⚠️ Баримтаас ${extractedAmount.toLocaleString()}₮ танигдлаа, харин захиалгын дүн ${expected.toLocaleString()}₮ байна. Манай ажилтан шалгаж тантай холбогдоно уу 🙏`;
+  } else {
+    replyText = `📸 Баримтыг хүлээн авлаа! Манай ажилтан шалгаж баталгаажуулна, түр хүлээнэ үү 🙏`;
+  }
+
+  // Admin-д Telegram мэдэгдэл — дансаар бол ҮРГЭЛЖ явуулна (QPay flow-той адил pattern)
+  if (orgId) {
+    try {
+      const org = await prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { telegramBotToken: true, telegramChatId: true },
+      });
+      const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+      const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+      if (botToken && chatId) {
+        const axios = require("axios");
+        const statusLine = amountMatches
+          ? "📥 Дансаар баримт ирлээ — дүн тохирч байна, БАТАЛГААЖУУЛНА УУ"
+          : `⚠️ Дансаар баримт ирлээ — дүн зөрүүтэй/танигдсангүй (танигдсан дүн: ${extractedAmount ? extractedAmount.toLocaleString() + "₮" : "тодорхойгүй"}), шалгана уу`;
+        const text = `${statusLine}\nЗахиалга #${orderCode}\nДүн: ₮${expected.toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}\nБаримт: ${imageUrl}`;
+        await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
+      }
+    } catch { /* non-blocking */ }
+  }
+
+  const history = await getHistory(psid, orgId);
+  await saveHistory(psid, [...history, { role: "user", content: "[ТӨЛБӨРИЙН БАРИМТ ЗУРАГ ИЛГЭЭСЭН]" }, { role: "assistant", content: replyText }], orgId);
+
+  if (orgId) await incrementMessageUsed(orgId, prisma);
+
+  return replyText;
+}
+
+module.exports = { processMessage: queuedProcessMessage, processReceiptImage };
