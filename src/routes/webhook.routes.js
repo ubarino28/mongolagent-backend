@@ -1,6 +1,6 @@
 "use strict";
 const express = require("express");
-const { processMessage } = require("../services/ai.service");
+const { processMessage, processReceiptImage } = require("../services/ai.service");
 const { sendText, sendTypingOn } = require("../services/facebook.service");
 const { getPrisma } = require("../lib/db");
 const { checkPayment } = require("../services/qpay.service");
@@ -59,6 +59,18 @@ router.post("/", (req, res) => {
             if (reply) await sendText(psid, reply, token);
           } catch (err) {
             console.error("[webhook] process error:", err.message);
+            await sendText(psid, "Уучлаарай, техникийн алдаа гарлаа 😔 Дахин оролдоно уу.", token).catch(() => {});
+          }
+        }
+
+        const imageAttachment = event.message?.attachments?.find((a) => a.type === "image");
+        if (imageAttachment?.payload?.url) {
+          try {
+            await sendTypingOn(psid, token);
+            const reply = await processReceiptImage(psid, imageAttachment.payload.url, orgId);
+            if (reply) await sendText(psid, reply, token);
+          } catch (err) {
+            console.error("[webhook] receipt process error:", err.message);
             await sendText(psid, "Уучлаарай, техникийн алдаа гарлаа 😔 Дахин оролдоно уу.", token).catch(() => {});
           }
         }
