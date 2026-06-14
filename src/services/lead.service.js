@@ -48,6 +48,20 @@ async function notifyTelegram(title, data, botToken, chatId) {
 
 async function saveOrder({ psid, orgId = null, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes }) {
   const prisma = getPrisma();
+
+  // Idempotency: AI ижил захиалгад save_order-ыг давтан дуудвал (жишээ нь "дансаар төлье" гэсний дараа)
+  // сүүлийн 30 минутад ижил psid+totalAmount-тай NEW захиалга байгаа бол давтахгүй
+  if (psid) {
+    const recent = await prisma.turuuOrder.findFirst({
+      where: {
+        psid, orgId, status: "NEW", totalAmount,
+        createdAt: { gte: new Date(Date.now() - 30 * 60 * 1000) },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (recent) return { ...recent, duplicate: true };
+  }
+
   const order = await prisma.turuuOrder.create({
     data: { psid, orgId, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes },
   });
