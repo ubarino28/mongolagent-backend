@@ -375,6 +375,9 @@ router.put("/profile/logo", async (req, res) => {
 });
 
 // KB merge helper functions
+const PRODUCT_ROOT = "Бүтээгдэхүүн";
+const PRODUCT_PREFIX = "Бүтээгдэхүүн / ";
+
 function normKB(s) {
   return s.toLowerCase()
     .replace(/[?!。？！.,;:]/g, "")
@@ -434,6 +437,56 @@ function mergeVariants(existing, incoming) {
     }
   }
   return result;
+}
+
+// GPT variants талбарыг хоосон үлдээж "M размер, улаан өнгийн нийт 50 ширхэг" гэх мэт
+// мэдээллийг answer текст рүү бичсэн тохиолдолд — нөөц (fallback) болгож задлана.
+const VARIANT_TEXT_PATTERNS = [
+  // <size> размер..., <color> өнг..., [нийт] <N> ш[ирхэг]
+  /(\S+)\s*размер\p{L}*[,.\s]*\s*(\S+)\s*өнг\p{L}*[,.\s]*\s*(?:нийт\s*)?(\d+)\s*ш\p{L}*/iu,
+  // <color> өнг..., <size> размер..., [нийт] <N> ш[ирхэг]
+  /(\S+)\s*өнг\p{L}*[,.\s]*\s*(\S+)\s*размер\p{L}*[,.\s]*\s*(?:нийт\s*)?(\d+)\s*ш\p{L}*/iu,
+];
+
+function cleanupAnswerText(answer, matched) {
+  return answer
+    .replace(matched, "")
+    .replace(/\s*\.\s*\./g, ".")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[,.\s]+|[,.\s]+$/g, "")
+    .trim();
+}
+
+function extractVariantFromAnswer(answer) {
+  if (!answer) return null;
+  for (let i = 0; i < VARIANT_TEXT_PATTERNS.length; i++) {
+    const m = answer.match(VARIANT_TEXT_PATTERNS[i]);
+    if (m) {
+      const variant = i === 0
+        ? { size: m[1], color: m[2], stock: parseInt(m[3], 10) }
+        : { color: m[1], size: m[2], stock: parseInt(m[3], 10) };
+      return { variant, cleanedAnswer: cleanupAnswerText(answer, m[0]) };
+    }
+  }
+  // size/color дурдалгаагүй, зөвхөн тоо ширхэг
+  const onlyCount = answer.match(/нийт\s*(\d+)\s*ш\p{L}*/iu);
+  if (onlyCount) {
+    const variant = { stock: parseInt(onlyCount[1], 10) };
+    return { variant, cleanedAnswer: cleanupAnswerText(answer, onlyCount[0]) };
+  }
+  return null;
+}
+
+// GPT-ийн өгсөн (эсвэл текстээс задалсан) category-г, variant мэдээлэлтэй бол
+// "Бүтээгдэхүүн / <дэд ангилал>" хэлбэрт албан журмаар оруулна.
+function normalizeProductCategory(category) {
+  const trimmed = (category || "").trim();
+  if (!trimmed) return PRODUCT_ROOT;
+  if (trimmed.toLowerCase().startsWith("бүтээгдэхүүн")) {
+    const sub = trimmed.split("/")[1]?.trim();
+    return sub ? `${PRODUCT_PREFIX}${sub}` : PRODUCT_ROOT;
+  }
+  return `${PRODUCT_PREFIX}${trimmed}`;
 }
 
 // POST /client/settings/builder — Builder AI: бизнесийн мэдээллээс мэдлэгийн сан үүсгэнэ
@@ -563,6 +616,9 @@ ${existingKBSummary}
    • Бизнесийн ерөнхий мэдээлэл (компани, хүргэлт, цаг, FAQ, бодлого г.м.) бол "Бүтээгдэхүүн / ..." АШИГЛАХГҮЙ — ердийн category (Компани, Хүргэлт, FAQ г.м.) ашигла.
    • ⚠️ Аль хэдийн "Бүтээгдэхүүн / ..." гэж тогтсон бараанд НЭМЭЛТ мэдээлэл (размер, өнгө, үлдэгдэл, нэмэлт зураг г.м.) өгч байгаа бол category-г ХЭВЭЭР "Бүтээгдэхүүн / <ижил дэд ангилал>" гэж бич — ердийн category руу СОЛИХГҮЙ.
    • Хэрэв БҮТЭЭГДЭХҮҮНИЙ мэдээлэлд размер/өнгө/үлдэгдлийн тоо орсон бол (жишээ: "M размер, улаан өнгөтэй, нийт 50 ширхэг") — энэ мэдээллийг variants массивт {size, color, stock} хэлбэрээр оруул. "answer" (тайлбар) дотор тоо хэмжээгээ ДАВТАН БИЧИХГҮЙ — зөвхөн үнэ/материал/онцлог зэрэг тайлбарыг бич.
+   • 📌 ЖИШЭЭ: хэрэглэгч "цамц категори нээгээд 50 ширхэг нэмээрэй, нэр нь Свитер, өнгө нь улаан, M размер" гэвэл →
+     save_knowledge_items({ items: [{ question: "Свитер", answer: "Хөнгөн даавуу", category: "Бүтээгдэхүүн / Цамц", variants: [{ size: "M", color: "Улаан", stock: 50 }] }] })
+     (category-д ЗААВАЛ "Бүтээгдэхүүн / " угтвар орно, "answer"-д хэмжээ/тоо ДАВТАГДАХГҮЙ, variants-д size/color/stock тусдаа орно.)
 → KB-д ижил сэдвийн зүйл байвал — тэр зүйлийн question текстийг ашигла (overlap ихснэ → шинэчлэгдэнэ).
 → Tool result-д merged > 0 → "Солигдлоо ✅"
 → Tool result-д created > 0 → "Нэмэгдлээ ✅"
@@ -940,13 +996,27 @@ ${RESTART_BLOCK}`;
 
         if (toolCall.function.name === "save_knowledge_items") {
           let created = 0, merged = 0;
-          const PRODUCT_PREFIX = "Бүтээгдэхүүн / ";
           // Шинэ save бүрт existingKB-г refresh хийнэ
           const currentKB = await prisma.turuuKnowledge.findMany({
             where: { orgId }, select: { id: true, question: true, answer: true, category: true, variants: true },
           });
 
           for (const item of args.items) {
+            // GPT variants-ыг хоосон үлдээж "M размер, улаан өнгийн нийт 50 ширхэг" гэх мэт
+            // мэдээллийг answer текст рүү бичсэн бол — нөөц (fallback) болгож задална.
+            let effectiveVariants = Array.isArray(item.variants) && item.variants.length > 0 ? item.variants : null;
+            let effectiveAnswer = item.answer;
+            if (!effectiveVariants) {
+              const extracted = extractVariantFromAnswer(item.answer);
+              if (extracted) {
+                effectiveVariants = [extracted.variant];
+                effectiveAnswer = extracted.cleanedAnswer || item.answer;
+              }
+            }
+            // Variant (размер/өнгө/үлдэгдэл) мэдээлэлтэй бол category-г "Бүтээгдэхүүн / ..."
+            // хэлбэрт албан журмаар оруулна — GPT буруу/дутуу category өгсөн ч KB руу алдагдахгүй.
+            const effectiveCategory = effectiveVariants ? normalizeProductCategory(item.category) : item.category;
+
             // Ижил утгатай KB хайна (60%+ word overlap). Зурагтай зүйлд threshold-ыг өндөрсгөж,
             // өөр бараа руу санамсаргүй merge хийгдэхээс сэргийлнэ — зураг бүр өөрийн KB зүйлтэй холбогддог.
             const mergeThreshold = item.imageUrl ? 0.85 : 0.6;
@@ -959,34 +1029,34 @@ ${RESTART_BLOCK}`;
 
             if (bestMatch && bestScore >= mergeThreshold) {
               // Байгаа KB-тэй нэгтгэнэ
-              const mergedAnswer = mergeAnswers(bestMatch.answer, item.answer);
-              const mergedVariants = mergeVariants(bestMatch.variants, item.variants);
+              const mergedAnswer = mergeAnswers(bestMatch.answer, effectiveAnswer);
+              const mergedVariants = mergeVariants(bestMatch.variants, effectiveVariants);
               // Аль хэдийн "Бүтээгдэхүүн / ..." болсон зүйлийг шинэ category нь
               // тэр төрлийн биш бол санамсаргүйгээр KB руу бууруулахгүй.
-              const isDowngrade = bestMatch.category?.startsWith(PRODUCT_PREFIX) && !item.category?.startsWith(PRODUCT_PREFIX);
+              const isDowngrade = bestMatch.category?.startsWith(PRODUCT_PREFIX) && !effectiveCategory?.startsWith(PRODUCT_PREFIX);
               await prisma.turuuKnowledge.update({
                 where: { id: bestMatch.id },
                 data: {
                   answer: mergedAnswer,
                   ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}),
-                  ...(item.category && !isDowngrade ? { category: item.category } : {}),
+                  ...(effectiveCategory && !isDowngrade ? { category: effectiveCategory } : {}),
                   ...(mergedVariants ? { variants: mergedVariants } : {}),
                 },
               });
               // currentKB-д шинэчилнэ (дараагийн item-д нөлөөлнө)
               bestMatch.answer = mergedAnswer;
               bestMatch.variants = mergedVariants;
-              if (item.category && !isDowngrade) bestMatch.category = item.category;
+              if (effectiveCategory && !isDowngrade) bestMatch.category = effectiveCategory;
               merged++;
             } else {
               // Шинэ KB үүсгэнэ
               const newItem = await prisma.turuuKnowledge.create({
                 data: {
-                  orgId, question: item.question, answer: item.answer, category: item.category || null, imageUrl: item.imageUrl || null,
-                  variants: Array.isArray(item.variants) && item.variants.length > 0 ? item.variants : null,
+                  orgId, question: item.question, answer: effectiveAnswer, category: effectiveCategory || null, imageUrl: item.imageUrl || null,
+                  variants: effectiveVariants,
                 },
               });
-              currentKB.push({ id: newItem.id, question: item.question, answer: item.answer, category: newItem.category, variants: newItem.variants });
+              currentKB.push({ id: newItem.id, question: item.question, answer: newItem.answer, category: newItem.category, variants: newItem.variants });
               created++;
             }
           }
