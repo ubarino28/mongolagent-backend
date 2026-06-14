@@ -324,8 +324,9 @@ async function processMessage(psid, userText, orgId = null) {
         const order = await saveOrder({ psid, orgId, ...args });
 
         // QPay auto-invoice: org-д merchant + данс тохируулсан бол автоматаар QR үүсгэнэ
+        // (давтан дуудсан захиалга бол дахин invoice үүсгэхгүй — аль хэдийн явуулсан)
         let qpayInfo = null;
-        if (orgId && order?.id) {
+        if (orgId && order?.id && !order.duplicate) {
           try {
             const org = await prisma.organization.findUnique({
               where: { id: orgId },
