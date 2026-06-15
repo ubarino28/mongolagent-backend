@@ -614,6 +614,7 @@ ${existingKBSummary}
    • <дэд ангилал>-ыг ЗААВАЛ Монгол КИРИЛЛ бичгээр бич — хэрэглэгч латин үсгээр ("tsamts", "gutal") бичсэн ч кирилл рүү хөрвүүлж бич ("Цамц", "Гутал").
    • Дээрх "ОДОО БАЙГАА МЭДЛЭГИЙН САН"-д "Бүтээгдэхүүн / ..." эхэлсэн ижил төстэй дэд ангилал байвал яг тэр нэрийг давтан ашигла — шинэ хувилбар (өөр бичигдэлтэй ижил утгатай) бүү үүсгэ.
    • Бизнесийн ерөнхий мэдээлэл (компани, хүргэлт, цаг, FAQ, бодлого г.м.) бол "Бүтээгдэхүүн / ..." АШИГЛАХГҮЙ — ердийн category (Компани, Хүргэлт, FAQ г.м.) ашигла.
+   • Мэдээлэл нь СЭДВИЙН дагуу: хүргэлттэй холбоотой бол category "Хүргэлт", буцаалт/солилт/гомдлын журамтай холбоотой бол category "Буцаалт", төлбөртэй холбоотой бол category "Төлбөр" гэж ангилж хадгал — "Үйлчилгээ" гэх мэт ерөнхий category-д хольж хадгалахгүй. Эдгээр нь зөвхөн жишээ — category-н тоо ХЯЗГААРГҮЙ, агуулгад хамгийн тохирох category нэрийг чи өөрөө шийдэж ашиглана.
    • ⚠️ Аль хэдийн "Бүтээгдэхүүн / ..." гэж тогтсон бараанд НЭМЭЛТ мэдээлэл (размер, өнгө, үлдэгдэл, нэмэлт зураг г.м.) өгч байгаа бол category-г ХЭВЭЭР "Бүтээгдэхүүн / <ижил дэд ангилал>" гэж бич — ердийн category руу СОЛИХГҮЙ.
    • Хэрэв БҮТЭЭГДЭХҮҮНИЙ мэдээлэлд размер/өнгө/үлдэгдлийн тоо орсон бол (жишээ: "M размер, улаан өнгөтэй, нийт 50 ширхэг") — энэ мэдээллийг variants массивт {size, color, stock} хэлбэрээр оруул. "answer" (тайлбар) дотор тоо хэмжээгээ ДАВТАН БИЧИХГҮЙ — зөвхөн үнэ/материал/онцлог зэрэг тайлбарыг бич.
    • 📌 ЖИШЭЭ: хэрэглэгч "цамц категори нээгээд 50 ширхэг нэмээрэй, нэр нь Свитер, өнгө нь улаан, M размер" гэвэл →
@@ -808,6 +809,12 @@ TOOL ДУУДАХ — АСУУЛТ БҮРИЙН ДАРАА ШУУД, ЖИЖИГ 
 🚨 ЗААВАЛ ДАГАХ ДҮРЭМ: 1️⃣-ээс 7️⃣ хүртэлх асуулт ТУС БҮРД нь хариулт авмагц ШУУДАА (дараагийн асуултыг асуухаасаа ӨМНӨ) тухайн ганц хариултыг save_knowledge_items функцээр ЯГ НЭГ Q&A зүйлтэйгээр дуудаж хадгал:
    { question: "<асуултын утга>", answer: "<хэрэглэгчийн өгсөн хариулт>", category: "<тухайн асуултын сэдэв — жишээ нь 'Гол хэрэглэгч', 'Давуу тал', 'Үйлчилгээ ба үнэ', 'FAQ', 'Цаг захиалга', 'Хүргэлт', 'Төлбөр ба цуцлалт', 'AI зан чанар'>" }
 ⚠️ "А. ЕРӨНХИЙ" багцын 5️⃣ асуулт (АЖЛЫН ЦАГ + ХҮРГЭЛТ): хэрэглэгч хүргэлтийн мэдээлэл (төлбөр/хамрах хүрээ/хугацаа/үнэгүй болох босго) өгвөл category-г ЗААВАЛ "Хүргэлт" гэж хадгал — захиалгын процессын тооцоолол search_knowledge("хүргэлт")-ээр яг энэ category-г хайдаг.
+⚠️ "А. ЕРӨНХИЙ" багцын 6️⃣ асуулт (ЗАХИАЛГА + БУЦААЛТ): хэрэглэгчийн хариултыг СЭДЭВ тус бүрээр ТУСДАА save_knowledge_items зүйл болгон ангилж хадгал (дээрх "ЯГ НЭГ Q&A" дүрмийн онцгой тохиолдол) — category-н тоо ХЯЗГААРГҮЙ, агуулгад хамгийн тохирох category нэрийг чи өөрөө шийднэ. Жишээ нь:
+   • Хүргэлттэй холбоотой агуулга (хэдэн хоногт хүргэх, хаана хүргэх г.м.) → category "Хүргэлт"
+   • Буцаалт/солилт/гомдлын журам → category "Буцаалт"
+   • Төлбөртэй холбоотой агуулга (урьдчилгаа, төлбөрийн хэлбэр) → category "Төлбөр"
+   • Захиалга өгөх арга/процессын тайлбар (жишээ: "мессежээр захиална") → category "Захиалга"
+   Эдгээр нь зөвхөн жишээ — агуулгад илүү тохирох өөр category нэр байвал (жишээ: "Баталгаа", "Урамшуулал" г.м.) чөлөөтэй үүсгэж ашигла. Жишээ: "Мессежээр захиалга авна, 50% урьдчилгаа төлбөр. Хэмжээ таараагүй бол 7 хоногийн дотор солино." гэсэн хариултыг 3 тусдаа item болгож (category: "Захиалга", "Төлбөр", "Буцаалт") хадгал.
 Ингэснээр мэдээлэл аажмаар, жижиг хэсгүүдээр найдвартай хадгалагдана. ХЭЗЭЭ Ч бүх 7 хариултыг ТӨГСГӨЛД нь нэг дор, том багцаар хадгалахгүй — том хариулт JSON хэлбэрээр үүсгэхэд тасарч KB-д огт орохгүй болох эрсдэлтэй.
 
 → save_business_profile: ЗӨВХӨН 7️⃣-р асуултад хариулт авсны ДАРАА, бусад ямар ч tool-той ХАМТ биш, ДАНГААРАА нэг л удаа дуудна — компанийн бүрэн профайл, system prompt, AI persona-г үүсгэнэ.
@@ -1536,13 +1543,19 @@ router.post("/chat", async (req, res) => {
               .sort((a, b) => b.score - a.score)
               .slice(0, 5);
             if (scored.length > 0) {
-              // Top result-ийн imageUrl-г хадгална
-              if (!replyImageUrl) replyImageUrl = scored[0].item.imageUrl || null;
-              result = scored.map((s) => {
+              const qNorm = normKB(query);
+              result = scored.map((s, idx) => {
                 let text = `А: ${s.item.question}\nХ: ${s.item.answer}`;
                 const vars = Array.isArray(s.item.variants) ? s.item.variants : [];
                 const colors = [...new Set(vars.filter((v) => v.color && (v.stock == null || v.stock > 0)).map((v) => v.color))];
                 if (colors.length > 0) text += `\nБайгаа өнгөнүүд: ${colors.join(", ")}`;
+                const colorsWithImages = [...new Set(vars.filter((v) => v.color && v.imageUrl).map((v) => v.color))];
+                if (colorsWithImages.length > 0) text += `\nЗурагтай өнгөнүүд: ${colorsWithImages.join(", ")}`;
+                // Хайлтын query-д дурдсан өнгөтэй variant-ын зургийг тэргүүлж сонгоно, тохирохгүй бол top result-ийн ерөнхий imageUrl
+                if (idx === 0 && !replyImageUrl) {
+                  const matchedVariant = vars.find((v) => v.color && v.imageUrl && qNorm.includes(normKB(v.color)));
+                  replyImageUrl = matchedVariant?.imageUrl || s.item.imageUrl || null;
+                }
                 return text;
               }).join("\n\n");
             }
@@ -1792,6 +1805,195 @@ Category: Бүтээгдэхүүн | Үнэ | Хүргэлт | Процесс | 
   } catch (e) {
     console.error("[client/upload/pdf] Error:", e.message);
     res.status(500).json({ error: "PDF боловсруулахад серверийн алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу." });
+  }
+});
+
+// ─── EXCEL PRODUCT IMPORT ───────────────────────────────────────────────────
+
+const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+function handleExcelUploadError(err, req, res, next) {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "Файлын хэмжээ хэтэрсэн байна (дээд тал нь 10MB)" });
+    }
+    return res.status(400).json({ error: "Файл хүлээн авахад алдаа гарлаа" });
+  }
+  next(err);
+}
+
+const EXCEL_HEADERS = ["Нэр", "Үнэ", "Ангилал", "Тайлбар", "Размер", "Өнгө", "Үлдэгдэл", "ЗурагURL"];
+const EXCEL_MAX_ROWS = 500;
+
+// "Үнэ: X₮. <тайлбар>" хэлбэрийн KB answer текст үүсгэнэ (knowledge/page.tsx-ийн formatProductAnswer-тэй ижил)
+function formatProductAnswerSrv(price, description) {
+  const trimmedPrice = String(price ?? "").trim().replace(/,/g, "");
+  const trimmedDesc = String(description ?? "").trim();
+  if (!trimmedPrice || isNaN(Number(trimmedPrice))) return trimmedDesc;
+  const formatted = Number(trimmedPrice).toLocaleString("mn-MN");
+  return `Үнэ: ${formatted}₮.${trimmedDesc ? ` ${trimmedDesc}` : ""}`;
+}
+
+// GET /client/upload/excel/template — бараа импортын загвар .xlsx татах
+router.get("/upload/excel/template", async (req, res) => {
+  const ExcelJS = require("exceljs");
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Бараа");
+  ws.addRow(EXCEL_HEADERS);
+  ws.addRow(["Эрэгтэй футболк", 35000, "Цамц", "100% хөнгөн даавуу", "M", "Цагаан", 10, ""]);
+  ws.addRow(["Эрэгтэй футболк", 35000, "Цамц", "100% хөнгөн даавуу", "L", "Цагаан", 5, ""]);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", "attachment; filename=baraa-import-zagvar.xlsx");
+  await wb.xlsx.write(res);
+  res.end();
+});
+
+// POST /client/upload/excel — Excel-ээс бараа бөөнөөр KB-д импортлоно (шинэ нэмэх / ижил нэртэйг шинэчлэх)
+router.post("/upload/excel", excelUpload.single("file"), handleExcelUploadError, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "file шаардлагатай" });
+
+    const ExcelJS = require("exceljs");
+    const wb = new ExcelJS.Workbook();
+    try {
+      await wb.xlsx.load(req.file.buffer);
+    } catch {
+      return res.status(400).json({ error: "Excel (.xlsx) файл уншихад алдаа гарлаа" });
+    }
+    const ws = wb.worksheets[0];
+    if (!ws) return res.status(400).json({ error: "Excel-д хуудас олдсонгүй" });
+    if (ws.rowCount - 1 > EXCEL_MAX_ROWS) {
+      return res.status(400).json({ error: `Excel-д хэт олон мөр байна (дээд тал нь ${EXCEL_MAX_ROWS} мөр)` });
+    }
+
+    const headerRow = ws.getRow(1);
+    const colIndex = {};
+    headerRow.eachCell((cell, colNumber) => {
+      const key = String(cell.value ?? "").trim().toLowerCase();
+      if (key) colIndex[key] = colNumber;
+    });
+    const nameCol = colIndex["нэр"];
+    const priceCol = colIndex["үнэ"];
+    if (!nameCol || !priceCol) {
+      return res.status(400).json({ error: `Excel-д "Нэр" болон "Үнэ" багана заавал байх ёстой. Загвар татаж ашиглана уу.` });
+    }
+    const catCol = colIndex["ангилал"];
+    const descCol = colIndex["тайлбар"];
+    const sizeCol = colIndex["размер"];
+    const colorCol = colIndex["өнгө"];
+    const stockCol = colIndex["үлдэгдэл"];
+    const imageCol = colIndex["зурагurl"];
+
+    const cellText = (row, col) => {
+      if (!col) return "";
+      const v = row.getCell(col).value;
+      if (v == null) return "";
+      if (typeof v === "object" && "result" in v) return String(v.result ?? "").trim();
+      if (typeof v === "object" && "text" in v) return String(v.text ?? "").trim();
+      return String(v).trim();
+    };
+
+    // "Нэр"-ээр бүлэглэнэ — ижил нэртэй мөрүүд нэг барааны хувилбарууд (Размер/Өнгө/Үлдэгдэл) болно
+    const groups = new Map();
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      const name = cellText(row, nameCol);
+      if (!name) continue;
+      const key = name.trim().toLowerCase();
+      if (!groups.has(key)) {
+        groups.set(key, { name: name.trim(), price: "", category: "", description: "", variants: [] });
+      }
+      const g = groups.get(key);
+      const price = cellText(row, priceCol);
+      const category = cellText(row, catCol);
+      const description = cellText(row, descCol);
+      const size = cellText(row, sizeCol);
+      const color = cellText(row, colorCol);
+      const stock = cellText(row, stockCol);
+      const imageUrl = cellText(row, imageCol);
+      if (!g.price && price) g.price = price;
+      if (!g.category && category) g.category = category;
+      if (!g.description && description) g.description = description;
+      if (size || color || imageUrl || stock) {
+        g.variants.push({ size, color, stock: parseInt(stock, 10) || 0, ...(imageUrl ? { imageUrl } : {}) });
+      }
+    }
+    if (groups.size === 0) return res.status(400).json({ error: "Excel-д бараа олдсонгүй" });
+
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const currentKB = await prisma.turuuKnowledge.findMany({
+      where: { orgId }, select: { id: true, question: true, answer: true, category: true, variants: true },
+    });
+    const productKB = currentKB.filter((k) => k.category?.startsWith(PRODUCT_PREFIX));
+
+    // Тус бүрд одоо байгаа бараатай таарч байгаа эсэхийг тодорхойлно (нэрийн дагуу, 60%+ ижил бол шинэчлэх)
+    for (const g of groups.values()) {
+      let bestMatch = null, bestScore = 0;
+      for (const kb of productKB) {
+        const score = productSimilarity(g.name, kb.question);
+        if (score > bestScore) { bestScore = score; bestMatch = kb; }
+      }
+      g.bestMatch = bestScore >= 0.6 ? bestMatch : null;
+    }
+
+    // "Ангилал" хоосон, шинээр үүсгэх бараануудыг AI-аар дэд ангилалд хуваарилна
+    const existingSubCats = [...new Set(
+      productKB.map((k) => k.category.slice(PRODUCT_PREFIX.length).trim()).filter(Boolean)
+    )];
+    const unclassified = [...groups.values()].filter((g) => !g.category.trim() && !g.bestMatch).map((g) => g.name);
+    const aiCategoryMap = {};
+    if (unclassified.length > 0) {
+      try {
+        const OpenAI = require("openai");
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        const aiRes = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content: `Та барааны нэрсийн жагсаалтыг уншаад тус бүрд тохирох ДЭД АНГИЛАЛ нэрийг гаргана уу.${existingSubCats.length > 0 ? ` Боломжтой бол дараах одоо байгаа ангилалуудаас сонго: ${existingSubCats.join(", ")}. Тохирохгүй бол шинэ ангилал нэр санал болго.` : " Тохирох богино, ойлгомжтой ангилал нэр санал болго."}
+JSON object хэлбэрт буцаа: {"<барааны нэр>": "<дэд ангилал>"}. Зөвхөн JSON буцаа — тайлбар нэмэхгүй.`,
+            },
+            { role: "user", content: unclassified.join("\n") },
+          ],
+          temperature: 0.2,
+          max_tokens: 1024,
+        });
+        const content = aiRes.choices[0].message.content?.trim() || "{}";
+        const cleaned = content.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+        Object.assign(aiCategoryMap, JSON.parse(cleaned));
+      } catch (e) {
+        console.error("[client/upload/excel] AI category error:", e.message);
+      }
+    }
+
+    let created = 0, updated = 0;
+    for (const g of groups.values()) {
+      const answer = formatProductAnswerSrv(g.price, g.description) || g.name;
+      const variants = g.variants.length > 0 ? g.variants : null;
+
+      if (g.bestMatch) {
+        const mergedVariants = mergeVariants(g.bestMatch.variants, variants);
+        const categoryUpdate = g.category.trim() ? { category: normalizeProductCategory(g.category.trim()) } : {};
+        await prisma.turuuKnowledge.update({
+          where: { id: g.bestMatch.id },
+          data: { answer, ...categoryUpdate, ...(mergedVariants ? { variants: mergedVariants } : {}) },
+        });
+        updated++;
+      } else {
+        const subCat = g.category.trim() || aiCategoryMap[g.name] || "Бусад";
+        await prisma.turuuKnowledge.create({
+          data: { orgId, question: g.name, answer, category: normalizeProductCategory(subCat), variants },
+        });
+        created++;
+      }
+    }
+
+    res.json({ ok: true, created, updated, total: groups.size });
+  } catch (e) {
+    console.error("[client/upload/excel] Error:", e.message);
+    res.status(500).json({ error: "Excel боловсруулахад серверийн алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу." });
   }
 });
 
