@@ -68,7 +68,7 @@ async function searchKnowledge(orgId, query) {
     const prisma = getPrisma();
     const items = await prisma.turuuKnowledge.findMany({
       where: { orgId: orgId || undefined, active: true },
-      select: { question: true, answer: true, category: true },
+      select: { question: true, answer: true, category: true, variants: true },
     });
 
     if (items.length === 0) return "Мэдлэгийн сан хоосон байна.";
@@ -87,7 +87,16 @@ async function searchKnowledge(orgId, query) {
 
     if (scored.length === 0) return "Мэдлэгийн санд тохирох мэдээлэл олдсонгүй.";
 
-    return scored.map((s) => `А: ${s.item.question}\nХ: ${s.item.answer}`).join("\n\n");
+    return scored.map((s) => {
+      let text = `А: ${s.item.question}\nХ: ${s.item.answer}`;
+      const vars = Array.isArray(s.item.variants) ? s.item.variants : [];
+      if (vars.length > 0) {
+        // Тоо хэмжээ биш зөвхөн байгаа/байхгүй эсэхийг л дамжуулна — хэрэглэгчид үлдэгдлийн тоог илчлэхгүй
+        const variantStr = vars.map((v) => `${[v.size, v.color].filter(Boolean).join("/")}: ${(v.stock ?? 0) > 0 ? "байгаа" : "байхгүй"}`).join(", ");
+        text += `\nХувилбарууд (размер/өнгө): ${variantStr}`;
+      }
+      return text;
+    }).join("\n\n");
   } catch {
     return "Мэдлэгийн санд хандахад алдаа гарлаа.";
   }
@@ -227,17 +236,17 @@ async function loadAISettings(orgId = null) {
 // psid тус бүрт processing queue — race condition запобігає
 const processingQueues = new Map();
 
-function queuedProcessMessage(psid, userText, orgId) {
+function queuedProcessMessage(psid, userText, orgId, imageUrl = null) {
   if (!processingQueues.has(psid)) {
     processingQueues.set(psid, Promise.resolve());
   }
-  const next = processingQueues.get(psid).then(() => processMessage(psid, userText, orgId));
+  const next = processingQueues.get(psid).then(() => processMessage(psid, userText, orgId, imageUrl));
   // Queue-г цэвэрлэх — хэтэрхий урт уламжлал хуримтлагдахгүй
   processingQueues.set(psid, next.catch(() => {}));
   return next;
 }
 
-async function processMessage(psid, userText, orgId = null) {
+async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   const prisma = getPrisma();
 
   // Block + handoff шалгах
@@ -253,7 +262,8 @@ async function processMessage(psid, userText, orgId = null) {
   } catch { /* proceed */ }
 
   // KB exact match cache — таарвал OpenAI дуудахгүй, хямд бөгөөд хурдан
-  if (orgId) {
+  // (зурагтай мессеж бол алгасна — зургийн агуулгаас хамаарч хариулт өөр байж болзошгүй)
+  if (orgId && !imageUrl) {
     const cached = await findExactMatch(orgId, userText);
     if (cached) {
       const hist = await getHistory(psid, orgId);
@@ -287,10 +297,18 @@ async function processMessage(psid, userText, orgId = null) {
     } catch { /* non-blocking */ }
   }
 
+  // Зурагтай мессеж бол vision хэлбэрээр илгээнэ (/client/chat-тай адил)
+  const userContent = imageUrl
+    ? [
+        { type: "image_url", image_url: { url: imageUrl, detail: "low" } },
+        { type: "text", text: userText || "Энэ зурагт байгаа барааны тухай асууж байна." },
+      ]
+    : userText;
+
   const messages = [
     { role: "system", content: systemPrompt },
     ...history,
-    { role: "user", content: userText },
+    { role: "user", content: userContent },
   ];
 
   const response = await getOpenAI().chat.completions.create({
@@ -410,7 +428,8 @@ async function processMessage(psid, userText, orgId = null) {
     replyText = choice.message.content?.trim() || "";
   }
 
-  await saveHistory(psid, [...history, { role: "user", content: userText }, { role: "assistant", content: replyText }], orgId);
+  const historyUserContent = imageUrl ? (userText || "[ЗУРАГ ИЛГЭЭСЭН]") : userText;
+  await saveHistory(psid, [...history, { role: "user", content: historyUserContent }, { role: "assistant", content: replyText }], orgId);
 
   // Мессежийн квот тоолох
   if (orgId) await incrementMessageUsed(orgId, prisma);
@@ -499,4 +518,49 @@ async function processReceiptImage(psid, imageUrl, orgId = null) {
   return replyText;
 }
 
-module.exports = { processMessage: queuedProcessMessage, processReceiptImage };
+// Ирсэн зургийг ангилна: төлбөрийн баримт/screenshot уу, эсвэл барааны зураг уу.
+// Алдаа гарвал "receipt" гэж үзнэ — одоогийн (баримт шалгах) урсгалтай адил тул аюулгүй.
+async function classifyImage(imageUrl, captionText) {
+  try {
+    const response = await getOpenAI().chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text:
+                `Энэ зургийг ангилна уу.\n` +
+                `- Хэрэв энэ бол банкны шилжүүлгийн баримт, QPay/гүйлгээний амжилттай дэлгэцийн зураг бол яг "receipt" гэж хариул.\n` +
+                `- Бусад тохиолдолд (бараа/бүтээгдэхүүний зураг, дэлгэцийн агшин г.м) яг "product" гэж хариул.\n` +
+                `ЗӨВХӨН "receipt" эсвэл "product" гэсэн нэг үгээр хариул, өөр юу ч бичих хэрэггүй.` +
+                (captionText ? `\n\nХэрэглэгчийн бичсэн текст: "${captionText}"` : ""),
+            },
+            { type: "image_url", image_url: { url: imageUrl, detail: "low" } },
+          ],
+        },
+      ],
+      max_tokens: 5,
+      temperature: 0,
+    });
+    const label = response.choices[0]?.message?.content?.trim().toLowerCase() || "";
+    return label.includes("product") ? "product" : "receipt";
+  } catch (err) {
+    console.error("[classifyImage]", err.message);
+    return "receipt";
+  }
+}
+
+// Хэрэглэгчийн илгээсэн зургийг төрлөөр нь зохих урсгал руу чиглүүлнэ:
+// төлбөрийн баримт бол processReceiptImage, бараа/бүтээгдэхүүний зураг бол
+// vision-той чат руу (processMessage) дамжуулна — жишээ нь "энэ ямар өнгөтэй байгаа?"
+async function processImageMessage(psid, imageUrl, captionText, orgId = null) {
+  const classification = await classifyImage(imageUrl, captionText);
+  if (classification === "receipt") {
+    return processReceiptImage(psid, imageUrl, orgId);
+  }
+  return queuedProcessMessage(psid, captionText || "", orgId, imageUrl);
+}
+
+module.exports = { processMessage: queuedProcessMessage, processReceiptImage, processImageMessage };
