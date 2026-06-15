@@ -1543,13 +1543,19 @@ router.post("/chat", async (req, res) => {
               .sort((a, b) => b.score - a.score)
               .slice(0, 5);
             if (scored.length > 0) {
-              // Top result-ийн imageUrl-г хадгална
-              if (!replyImageUrl) replyImageUrl = scored[0].item.imageUrl || null;
-              result = scored.map((s) => {
+              const qNorm = normKB(query);
+              result = scored.map((s, idx) => {
                 let text = `А: ${s.item.question}\nХ: ${s.item.answer}`;
                 const vars = Array.isArray(s.item.variants) ? s.item.variants : [];
                 const colors = [...new Set(vars.filter((v) => v.color && (v.stock == null || v.stock > 0)).map((v) => v.color))];
                 if (colors.length > 0) text += `\nБайгаа өнгөнүүд: ${colors.join(", ")}`;
+                const colorsWithImages = [...new Set(vars.filter((v) => v.color && v.imageUrl).map((v) => v.color))];
+                if (colorsWithImages.length > 0) text += `\nЗурагтай өнгөнүүд: ${colorsWithImages.join(", ")}`;
+                // Хайлтын query-д дурдсан өнгөтэй variant-ын зургийг тэргүүлж сонгоно, тохирохгүй бол top result-ийн ерөнхий imageUrl
+                if (idx === 0 && !replyImageUrl) {
+                  const matchedVariant = vars.find((v) => v.color && v.imageUrl && qNorm.includes(normKB(v.color)));
+                  replyImageUrl = matchedVariant?.imageUrl || s.item.imageUrl || null;
+                }
                 return text;
               }).join("\n\n");
             }
