@@ -63,6 +63,8 @@ async function incrementMessageUsed(orgId, prisma) {
 }
 
 // KB-с хайлт хийх — GPT query-г normalize хийсний дараа дуудна
+// Буцаах нь { text, variantImages } — text нь tool-result-д, variantImages нь
+// хэрэглэгч зураг илгээсэн үед vision харьцуулалтад ашиглагдана
 async function searchKnowledge(orgId, query) {
   try {
     const prisma = getPrisma();
@@ -71,7 +73,7 @@ async function searchKnowledge(orgId, query) {
       select: { question: true, answer: true, category: true, variants: true },
     });
 
-    if (items.length === 0) return "Мэдлэгийн сан хоосон байна.";
+    if (items.length === 0) return { text: "Мэдлэгийн сан хоосон байна.", variantImages: [] };
 
     const qWords = normalizeText(query).split(" ").filter((w) => w.length > 1);
 
@@ -85,20 +87,26 @@ async function searchKnowledge(orgId, query) {
       .sort((a, b) => b.score - a.score)
       .slice(0, 5);
 
-    if (scored.length === 0) return "Мэдлэгийн санд тохирох мэдээлэл олдсонгүй.";
+    if (scored.length === 0) return { text: "Мэдлэгийн санд тохирох мэдээлэл олдсонгүй.", variantImages: [] };
 
-    return scored.map((s) => {
-      let text = `А: ${s.item.question}\nХ: ${s.item.answer}`;
+    const variantImages = [];
+    const text = scored.map((s) => {
+      let t = `А: ${s.item.question}\nХ: ${s.item.answer}`;
       const vars = Array.isArray(s.item.variants) ? s.item.variants : [];
       if (vars.length > 0) {
         // Тоо хэмжээ биш зөвхөн байгаа/байхгүй эсэхийг л дамжуулна — хэрэглэгчид үлдэгдлийн тоог илчлэхгүй
         const variantStr = vars.map((v) => `${[v.size, v.color].filter(Boolean).join("/")}: ${(v.stock ?? 0) > 0 ? "байгаа" : "байхгүй"}`).join(", ");
-        text += `\nХувилбарууд (размер/өнгө): ${variantStr}`;
+        t += `\nХувилбарууд (размер/өнгө): ${variantStr}`;
+        vars.forEach((v) => {
+          if (v.imageUrl) variantImages.push({ label: [v.size, v.color].filter(Boolean).join("/"), imageUrl: v.imageUrl });
+        });
       }
-      return text;
+      return t;
     }).join("\n\n");
+
+    return { text, variantImages };
   } catch {
-    return "Мэдлэгийн санд хандахад алдаа гарлаа.";
+    return { text: "Мэдлэгийн санд хандахад алдаа гарлаа.", variantImages: [] };
   }
 }
 
@@ -159,7 +167,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "save_order",
-      description: "Хэрэглэгч захиалгаа баталгаажуулж нэр, утас, хаяг өгсний дараа дуудна.",
+      description: "Хэрэглэгч захиалгаа баталгаажуулж нэр, утас, хаяг өгсний дараа дуудна. ЧУХАЛ: бараа нь өнгө/размер-тэй (variant) бол заавал хэрэглэгчийн СОНГОСОН өнгө болон размерийг тодруулсны дараа л дуудна — мэдэхгүй байхад дуудаж болохгүй.",
       parameters: {
         type: "object",
         properties: {
@@ -172,7 +180,9 @@ const TOOLS = [
             items: {
               type: "object",
               properties: {
-                name:  { type: "string" },
+                name:  { type: "string", description: "Барааны нэр" },
+                color: { type: "string", description: "Сонгосон өнгө (variant байвал заавал)" },
+                size:  { type: "string", description: "Сонгосон размер (variant байвал заавал)" },
                 qty:   { type: "number" },
                 price: { type: "number" },
               },
@@ -326,6 +336,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   if (choice.finish_reason === "tool_calls") {
     const toolCalls = choice.message.tool_calls;
     const toolResults = [];
+    const variantImages = []; // зураг илгээсэн хэрэглэгчтэй харьцуулах сангийн variant зурагнууд
 
     for (const toolCall of toolCalls) {
       const args = JSON.parse(toolCall.function.arguments);
@@ -387,8 +398,9 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         });
 
       } else if (toolCall.function.name === "search_knowledge") {
-        const result = await searchKnowledge(orgId, args.query);
-        toolResults.push({ tool_call_id: toolCall.id, content: result });
+        const { text, variantImages: vImgs } = await searchKnowledge(orgId, args.query);
+        toolResults.push({ tool_call_id: toolCall.id, content: text });
+        variantImages.push(...vImgs);
 
       } else if (toolCall.function.name === "flag_unanswered") {
         // Хариулагдаагүй асуултыг DB-д хадгала
@@ -412,13 +424,35 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
     }
 
     // Follow-up: tool үр дүнтэй дахин дуудна
+    const followUpMessages = [
+      ...messages,
+      choice.message,
+      ...toolResults.map((r) => ({ role: "tool", tool_call_id: r.tool_call_id, content: r.content })),
+    ];
+
+    // Хэрэглэгч зураг илгээсэн бол сангийн variant зурагнуудтай шууд visual харьцуулна
+    // (нэрээр харьцуулах нь хувилбар нэрс яг тохирохгүй үед буруу "байхгүй" хариу өгдөг асуудлыг засна)
+    if (imageUrl && variantImages.length > 0) {
+      const seen = new Set();
+      const uniqueImages = variantImages.filter((v) => {
+        if (seen.has(v.imageUrl)) return false;
+        seen.add(v.imageUrl);
+        return true;
+      }).slice(0, 6);
+
+      const comparisonContent = [
+        { type: "text", text: "Эдгээр нь мэдлэгийн санд хадгалагдсан хувилбаруудын зургууд. Хэрэглэгчийн илгээсэн зурагтай (дээрх) нэг нэгээр харьцуулж, аль нь тохирохыг тодорхойл:" },
+      ];
+      uniqueImages.forEach((v) => {
+        comparisonContent.push({ type: "image_url", image_url: { url: v.imageUrl, detail: "low" } });
+        comparisonContent.push({ type: "text", text: `↑ Дээрх зураг: ${v.label}` });
+      });
+      followUpMessages.push({ role: "user", content: comparisonContent });
+    }
+
     const followUp = await getOpenAI().chat.completions.create({
       model: aiSettings.model,
-      messages: [
-        ...messages,
-        choice.message,
-        ...toolResults.map((r) => ({ role: "tool", tool_call_id: r.tool_call_id, content: r.content })),
-      ],
+      messages: followUpMessages,
       temperature: aiSettings.temperature,
       max_tokens:  512,
     });
