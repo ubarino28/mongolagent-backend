@@ -332,7 +332,36 @@ async function buildSystemPrompt(isNew, orgId = null) {
 
   const body = bodyPrompt || getDefaultBody();
 
-  return `${body}\n\n${imageBlock}\n\n${variantImageBlock}\n\n${visualMatchBlock}\n\n${newConvLine}`;
+  // Appointment block — зөвхөн org-д active staff байвал нэмнэ
+  let appointmentBlock = "";
+  if (orgId) {
+    try {
+      const prismaInst = getPrisma();
+      const staffCount = await prismaInst.turuuStaff.count({ where: { orgId, isActive: true } });
+      if (staffCount > 0) {
+        appointmentBlock = `━━━━━━━━━━━━━━━━━━━━━━━━━
+ЦАГИЙН ЗАХИАЛГА
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Хэрэглэгч цаг захиалах, цаг авах, appointment хүсвэл:
+1. check_staff дуудаж мастеруудын жагсаалт, тэдний үйлчилгээ, ажлын цагийг ол
+2. Олон мастер байвал → "Аль мастертай цаг авах вэ?" гэж нэг асуулт асуу
+3. Мастер тодорхойлогдсон бол → ямар үйлчилгээ авах вэ гэдгийг ол (check_staff-ийн жагсаалтаас)
+4. Ямар өдөр авах вэ гэдгийг ол → огноог YYYY-MM-DD болгоно
+5. check_availability(staffId, date, serviceName) дуудаж боломжит цагуудыг ол
+   → Цагуудыг тоочин харуул → хэрэглэгч нэгийг сонгосны дараа цааш яв
+6. Нэр, утасны дугаар ав
+7. БАТАЛГААЖУУЛ: "Цаг захиалгаа баталгаажуулна уу?\\n📅 [date] [timeSlot]\\n💆 Мастер: [staffName]\\n✂️ Үйлчилгээ: [serviceName]\\n👤 [customerName]\\n📞 [customerPhone]\\nЗөв үү?"
+8. Баталгаажуулсны дараа save_appointment дуудна → "Цагаа амжилттай захиаллаа! 🎉"
+✗ check_availability дуудалгүй цаг санал болгохгүй
+✗ save_appointment дуудахын өмнө нэр болон утас ЗААВАЛ авсан байна`;
+      }
+    } catch { /* non-blocking */ }
+  }
+
+  const parts = [body, imageBlock, variantImageBlock, visualMatchBlock];
+  if (appointmentBlock) parts.push(appointmentBlock);
+  parts.push(newConvLine);
+  return parts.join("\n\n");
 }
 
 module.exports = { buildSystemPrompt, buildNarrativePrompt, buildCoreTemplate, extractKBFromProfile };
