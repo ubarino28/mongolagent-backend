@@ -2220,4 +2220,164 @@ router.post("/orders/:id/check-payment", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── STAFF ───────────────────────────────────────────────────────────────────
+
+// GET /client/staff
+router.get("/staff", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const staff = await prisma.turuuStaff.findMany({
+      where: { orgId: req.org.orgId, isActive: true },
+      orderBy: { createdAt: "asc" },
+    });
+    res.json(staff);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/staff
+router.post("/staff", async (req, res) => {
+  try {
+    const { name, services, workDays, workStart, workEnd } = req.body;
+    if (!name) return res.status(400).json({ error: "name шаардлагатай" });
+    const prisma = getPrisma();
+    const staff = await prisma.turuuStaff.create({
+      data: {
+        orgId: req.org.orgId,
+        name,
+        services: services ?? [],
+        workDays: workDays ?? [1, 2, 3, 4, 5],
+        workStart: workStart ?? "09:00",
+        workEnd:   workEnd   ?? "18:00",
+      },
+    });
+    res.json(staff);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /client/staff/:id
+router.put("/staff/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const existing = await prisma.turuuStaff.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!existing) return res.status(404).json({ error: "Олдсонгүй" });
+    const { name, services, workDays, workStart, workEnd, isActive } = req.body;
+    const staff = await prisma.turuuStaff.update({
+      where: { id: req.params.id },
+      data: {
+        ...(name       !== undefined && { name }),
+        ...(services   !== undefined && { services }),
+        ...(workDays   !== undefined && { workDays }),
+        ...(workStart  !== undefined && { workStart }),
+        ...(workEnd    !== undefined && { workEnd }),
+        ...(isActive   !== undefined && { isActive }),
+      },
+    });
+    res.json(staff);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /client/staff/:id
+router.delete("/staff/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const existing = await prisma.turuuStaff.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!existing) return res.status(404).json({ error: "Олдсонгүй" });
+    await prisma.turuuStaff.update({ where: { id: req.params.id }, data: { isActive: false } });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── AVAILABILITY ─────────────────────────────────────────────────────────────
+
+function buildSlots(workStart, workEnd, durationMinutes) {
+  const [sh, sm] = workStart.split(":").map(Number);
+  const [eh, em] = workEnd.split(":").map(Number);
+  let cur = sh * 60 + sm;
+  const end = eh * 60 + em;
+  const slots = [];
+  while (cur + durationMinutes <= end) {
+    slots.push(`${String(Math.floor(cur / 60)).padStart(2, "0")}:${String(cur % 60).padStart(2, "0")}`);
+    cur += durationMinutes;
+  }
+  return slots;
+}
+
+// GET /client/availability?date=2026-06-20&staffId=xxx
+router.get("/availability", async (req, res) => {
+  try {
+    const { date, staffId } = req.query;
+    if (!date || !staffId) return res.status(400).json({ error: "date, staffId шаардлагатай" });
+
+    const prisma = getPrisma();
+    const staff = await prisma.turuuStaff.findFirst({ where: { id: staffId, orgId: req.org.orgId, isActive: true } });
+    if (!staff) return res.status(404).json({ error: "Мастер олдсонгүй" });
+
+    // Амралтын өдөр шалгах (ISO weekday: 1=Даваа ... 7=Ням)
+    const dayOfWeek = new Date(date).getDay() || 7; // 0(Sun)→7
+    const offDays = Array.isArray(staff.workDays) ? staff.workDays : JSON.parse(staff.workDays);
+    if (!offDays.includes(dayOfWeek)) {
+      return res.json({ date, staffId, available: [], offDay: true });
+    }
+
+    // Тухайн өдрийн захиалгуудыг татах
+    const booked = await prisma.turuuAppointment.findMany({
+      where: { staffId, date, status: { not: "CANCELLED" } },
+      select: { timeSlot: true },
+    });
+    const bookedSlots = booked.map((b) => b.timeSlot);
+
+    // Slot тооцоолол — service-үүдийн хамгийн урт duration ашиглана
+    const services = Array.isArray(staff.services) ? staff.services : JSON.parse(staff.services);
+    const duration = services.length > 0
+      ? Math.max(...services.map((s) => s.durationMinutes || 60))
+      : 60;
+
+    const allSlots = buildSlots(staff.workStart, staff.workEnd, duration);
+    const available = allSlots.filter((s) => !bookedSlots.includes(s));
+
+    res.json({ date, staffId, staffName: staff.name, available, offDay: false });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── APPOINTMENTS ─────────────────────────────────────────────────────────────
+
+// GET /client/appointments
+router.get("/appointments", async (req, res) => {
+  try {
+    const { date, status, page = 1 } = req.query;
+    const take = 20;
+    const skip = (Number(page) - 1) * take;
+    const prisma = getPrisma();
+    const where = {
+      orgId: req.org.orgId,
+      ...(date   && { date }),
+      ...(status && { status }),
+    };
+    const [data, total] = await Promise.all([
+      prisma.turuuAppointment.findMany({
+        where,
+        include: { staff: { select: { name: true } } },
+        orderBy: [{ date: "asc" }, { timeSlot: "asc" }],
+        take,
+        skip,
+      }),
+      prisma.turuuAppointment.count({ where }),
+    ]);
+    res.json({ data, total, page: Number(page), pages: Math.ceil(total / take) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /client/appointments/:id/status
+router.put("/appointments/:id/status", async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!["PENDING", "CONFIRMED", "CANCELLED"].includes(status)) return res.status(400).json({ error: "status буруу" });
+    const prisma = getPrisma();
+    const appt = await prisma.turuuAppointment.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!appt) return res.status(404).json({ error: "Олдсонгүй" });
+    const updated = await prisma.turuuAppointment.update({ where: { id: req.params.id }, data: { status } });
+    res.json(updated);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 module.exports = router;
