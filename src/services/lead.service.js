@@ -75,4 +75,33 @@ async function saveOrder({ psid, orgId = null, customerName, customerPhone, cust
   return order;
 }
 
-module.exports = { saveLead, saveConsultation, saveOrder };
+async function saveAppointment({ psid, orgId = null, staffId, staffName, serviceName, durationMinutes, date, timeSlot, customerName, customerPhone, depositAmount = 0, notes }) {
+  const prisma = getPrisma();
+
+  // Idempotency: ижил мастер/огноо/цаг/утасны дугаарт 10 минутад давтан дуудсан бол алгасна
+  if (psid) {
+    const recent = await prisma.turuuAppointment.findFirst({
+      where: { psid, orgId, staffId, date, timeSlot, createdAt: { gte: new Date(Date.now() - 10 * 60 * 1000) } },
+    });
+    if (recent) return { ...recent, duplicate: true };
+  }
+
+  const appt = await prisma.turuuAppointment.create({
+    data: { psid, orgId, staffId, serviceName, durationMinutes, date, timeSlot, customerName, customerPhone, depositAmount, notes },
+  });
+
+  const { botToken, chatId } = await getTelegramConfig(orgId);
+  await notifyTelegram("📅 Шинэ цаг захиалга", {
+    Мастер:      staffName || staffId,
+    Үйлчилгээ:   serviceName,
+    Огноо:       `${date} ${timeSlot}`,
+    Хэрэглэгч:   customerName,
+    Утас:         customerPhone,
+    Урьдчилгаа:  depositAmount > 0 ? `₮${depositAmount.toLocaleString()}` : undefined,
+    Тэмдэглэл:   notes,
+  }, botToken, chatId);
+
+  return appt;
+}
+
+module.exports = { saveLead, saveConsultation, saveOrder, saveAppointment };

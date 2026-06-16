@@ -2,7 +2,7 @@
 const OpenAI = require("openai");
 const { buildSystemPrompt } = require("../lib/prompt");
 const { getHistory, saveHistory, isNewConversation } = require("../lib/history");
-const { saveLead, saveConsultation, saveOrder } = require("./lead.service");
+const { saveLead, saveConsultation, saveOrder, saveAppointment } = require("./lead.service");
 const { getPrisma } = require("../lib/db");
 
 let openai;
@@ -17,6 +17,22 @@ const PLAN_NEXT  = { starter: "Growth", growth: "Business", business: "Enterpris
 // Текстийг normalize хийх (тэмдэгт арилгах, жижиглэх)
 function normalizeText(s) {
   return s.toLowerCase().trim().replace(/[?!。？！.,;:]/g, "").replace(/\s+/g, " ").trim();
+}
+
+// Ажлын цагийн хугацаанд duration-тай slot үүсгэх
+function buildSlots(workStart, workEnd, durationMinutes) {
+  const slots = [];
+  const [sh, sm] = workStart.split(":").map(Number);
+  const [eh, em] = workEnd.split(":").map(Number);
+  let cur = sh * 60 + sm;
+  const end = eh * 60 + em;
+  while (cur + durationMinutes <= end) {
+    const h = Math.floor(cur / 60).toString().padStart(2, "0");
+    const m = (cur % 60).toString().padStart(2, "0");
+    slots.push(`${h}:${m}`);
+    cur += durationMinutes;
+  }
+  return slots;
 }
 
 // KB-с яг таарах хариулт хайна — таарвал OpenAI дуудахгүй
@@ -223,6 +239,53 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "check_staff",
+      description: "Байгаа мастеруудын жагсаалтыг авна — нэр, үйлчилгээ, ажлын цаг. Цаг захиалах яриа эхлэхэд эхлээд дуудна.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_availability",
+      description: "Тухайн мастерын тодорхой өдрийн боломжит цагуудыг авна. staffId болон date YYYY-MM-DD форматаар заавал дамжуулна.",
+      parameters: {
+        type: "object",
+        properties: {
+          staffId:     { type: "string", description: "Мастерын ID (check_staff-с авна)" },
+          date:        { type: "string", description: "Огноо YYYY-MM-DD форматаар" },
+          serviceName: { type: "string", description: "Үйлчилгээний нэр (байвал тэрнийх duration ашиглана)" },
+        },
+        required: ["staffId", "date"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "save_appointment",
+      description: "Хэрэглэгч цаг захиалгаа баталгаажуулсны дараа хадгалах. customerName болон customerPhone ЗААВАЛ авсан байна.",
+      parameters: {
+        type: "object",
+        properties: {
+          staffId:         { type: "string" },
+          staffName:       { type: "string" },
+          serviceName:     { type: "string" },
+          durationMinutes: { type: "number" },
+          date:            { type: "string", description: "YYYY-MM-DD" },
+          timeSlot:        { type: "string", description: "HH:MM" },
+          customerName:    { type: "string" },
+          customerPhone:   { type: "string" },
+          depositAmount:   { type: "number" },
+          notes:           { type: "string" },
+        },
+        required: ["staffId", "serviceName", "durationMinutes", "date", "timeSlot", "customerPhone"],
+      },
+    },
+  },
 ];
 
 async function loadAISettings(orgId = null) {
@@ -420,6 +483,61 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
           });
         } catch { /* non-blocking */ }
         toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ handoff: true }) });
+
+      } else if (toolCall.function.name === "check_staff") {
+        try {
+          const staffList = await prisma.turuuStaff.findMany({
+            where: { orgId, isActive: true },
+            select: { id: true, name: true, services: true, workDays: true, workStart: true, workEnd: true },
+          });
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ staff: staffList }) });
+        } catch {
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ staff: [] }) });
+        }
+
+      } else if (toolCall.function.name === "check_availability") {
+        try {
+          const { date, staffId, serviceName } = args;
+          const staff = await prisma.turuuStaff.findFirst({ where: { id: staffId, orgId, isActive: true } });
+          if (!staff) {
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Мастер олдсонгүй" }) });
+          } else {
+            const d = new Date(`${date}T00:00:00`);
+            const jsDay = d.getDay();
+            const isoDay = jsDay === 0 ? 7 : jsDay;
+            const workDays = Array.isArray(staff.workDays) ? staff.workDays : JSON.parse(staff.workDays || "[1,2,3,4,5]");
+            if (!workDays.includes(isoDay)) {
+              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ availableSlots: [], reason: "Тухайн өдөр амарна" }) });
+            } else {
+              const booked = await prisma.turuuAppointment.findMany({
+                where: { staffId, date, status: { not: "CANCELLED" } },
+                select: { timeSlot: true },
+              });
+              const bookedTimes = new Set(booked.map((b) => b.timeSlot));
+              const services = Array.isArray(staff.services) ? staff.services : JSON.parse(staff.services || "[]");
+              let duration = 60;
+              if (serviceName) {
+                const svc = services.find((s) => s.name === serviceName);
+                if (svc?.durationMinutes) duration = svc.durationMinutes;
+              } else {
+                duration = services.reduce((max, s) => Math.max(max, s.durationMinutes || 60), 60);
+              }
+              const allSlots = buildSlots(staff.workStart, staff.workEnd, duration);
+              const available = allSlots.filter((s) => !bookedTimes.has(s));
+              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ availableSlots: available, staffName: staff.name }) });
+            }
+          }
+        } catch {
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Цагийн мэдээлэл авахад алдаа гарлаа" }) });
+        }
+
+      } else if (toolCall.function.name === "save_appointment") {
+        try {
+          const appt = await saveAppointment({ psid, orgId, ...args });
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true, duplicate: appt.duplicate || false }) });
+        } catch (e) {
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: e.message }) });
+        }
       }
     }
 

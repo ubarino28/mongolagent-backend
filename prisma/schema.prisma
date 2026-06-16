@@ -151,3 +151,41 @@ model TuruuKnowledge {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model TuruuStaff {
+  id           String              @id @default(uuid())
+  orgId        String
+  name         String
+  services     Json                @default("[]")
+  workDays     Json                @default("[1,2,3,4,5]")
+  workStart    String              @default("09:00")
+  workEnd      String              @default("18:00")
+  isActive     Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  appointments TuruuAppointment[]
+}
+
+model TuruuAppointment {
+  id              String      @id @default(uuid())
+  orgId           String
+  psid            String?
+  staffId         String
+  staff           TuruuStaff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  serviceName     String
+  durationMinutes Int
+  date            String
+  timeSlot        String
+  customerName    String?
+  customerPhone   String?
+  depositAmount   Float       @default(0)
+  depositStatus   String      @default("NONE")
+  qpayInvoiceId   String?
+  qpayQrText      String?
+  qpayUrls        Json?
+  qpayStatus      String?
+  status          String      @default("PENDING")
+  notes           String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
