@@ -67,7 +67,10 @@ async function saveOrder({ psid, orgId = null, customerName, customerPhone, cust
   });
 
   const { botToken, chatId } = await getTelegramConfig(orgId);
-  const itemsSummary = Array.isArray(items) ? items.map((i) => `${i.name} x${i.qty} — ₮${(i.price * i.qty).toLocaleString()}`).join("\n") : "";
+  const itemsSummary = Array.isArray(items) ? items.map((i) => {
+    const variant = [i.color, i.size].filter(Boolean).join(" / ");
+    return `${i.name}${variant ? ` (${variant})` : ""} x${i.qty} — ₮${(i.price * i.qty).toLocaleString()}`;
+  }).join("\n") : "";
   await notifyTelegram("🛒 Шинэ захиалга", { customerName, customerPhone, deliveryAddress, items: itemsSummary, totalAmount: `₮${totalAmount?.toLocaleString()}`, notes }, botToken, chatId);
   return order;
 }

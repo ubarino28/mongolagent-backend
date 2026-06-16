@@ -159,7 +159,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "save_order",
-      description: "Хэрэглэгч захиалгаа баталгаажуулж нэр, утас, хаяг өгсний дараа дуудна.",
+      description: "Хэрэглэгч захиалгаа баталгаажуулж нэр, утас, хаяг өгсний дараа дуудна. ЧУХАЛ: бараа нь өнгө/размер-тэй (variant) бол заавал хэрэглэгчийн СОНГОСОН өнгө болон размерийг тодруулсны дараа л дуудна — мэдэхгүй байхад дуудаж болохгүй.",
       parameters: {
         type: "object",
         properties: {
@@ -172,7 +172,9 @@ const TOOLS = [
             items: {
               type: "object",
               properties: {
-                name:  { type: "string" },
+                name:  { type: "string", description: "Барааны нэр" },
+                color: { type: "string", description: "Сонгосон өнгө (variant байвал заавал)" },
+                size:  { type: "string", description: "Сонгосон размер (variant байвал заавал)" },
                 qty:   { type: "number" },
                 price: { type: "number" },
               },
