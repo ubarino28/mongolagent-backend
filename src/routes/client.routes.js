@@ -818,6 +818,7 @@ TOOL ДУУДАХ — АСУУЛТ БҮРИЙН ДАРАА ШУУД, ЖИЖИГ 
 Ингэснээр мэдээлэл аажмаар, жижиг хэсгүүдээр найдвартай хадгалагдана. ХЭЗЭЭ Ч бүх 7 хариултыг ТӨГСГӨЛД нь нэг дор, том багцаар хадгалахгүй — том хариулт JSON хэлбэрээр үүсгэхэд тасарч KB-д огт орохгүй болох эрсдэлтэй.
 
 → save_business_profile: ЗӨВХӨН 7️⃣-р асуултад хариулт авсны ДАРАА, бусад ямар ч tool-той ХАМТ биш, ДАНГААРАА нэг л удаа дуудна — компанийн бүрэн профайл, system prompt, AI persona-г үүсгэнэ.
+  businessType талбарыг ЗААВАЛ тохируул: Б.ЭМНЭЛЭГ/КЛИНИК → "clinic" | В.САЛОН/ГОО САЙХАН → "salon" | А.ЕРӨНХИЙ+бараа/онлайн дэлгүүр → "shop" | А.ЕРӨНХИЙ+бусад үйлчилгээ → "service" | тодорхойгүй → "other"
 
 AI нэр: өгөөгүй бол компани нэрнээс үүсгэ ("Номин" → "Номин туслах")
 
@@ -917,6 +918,7 @@ ${RESTART_BLOCK}`;
               caseStudy:      { type: "string" },
               forbiddenTopics:{ type: "string" },
               extraRules:     { type: "string" },
+              businessType:   { type: "string", enum: ["shop", "salon", "clinic", "service", "other"], description: "Бизнесийн чиглэл: Б.ЭМНЭЛЭГ/КЛИНИК → clinic, В.САЛОН/ГОО САЙХАН → salon, А.ЕРӨНХИЙ+бараа/дэлгүүр → shop, А.ЕРӨНХИЙ+бусад үйлчилгээ → service, тодорхойгүй → other" },
             },
             required: ["company"],
           },
@@ -1082,6 +1084,7 @@ ${RESTART_BLOCK}`;
             { key: "ai_contact",    value: args.contact || "" },
             { key: "ai_profile",    value: JSON.stringify(profile) },
             { key: "system_prompt", value: narrativePrompt },
+            { key: "business_type", value: args.businessType || "other" },
           ];
           for (const u of upserts) {
             await prisma.turuuSettings.upsert({
@@ -1662,11 +1665,16 @@ router.post("/profile/email/verify", async (req, res) => {
 router.get("/profile", async (req, res) => {
   try {
     const prisma = getPrisma();
-    const org = await prisma.organization.findUnique({
-      where: { id: req.org.orgId },
-      select: { id: true, name: true, slug: true, email: true, plan: true, status: true, logoUrl: true, fbPageId: true, fbPageToken: true, telegramBotToken: true, telegramChatId: true, createdAt: true },
-    });
-    res.json(org);
+    const [org, btSetting] = await Promise.all([
+      prisma.organization.findUnique({
+        where: { id: req.org.orgId },
+        select: { id: true, name: true, slug: true, email: true, plan: true, status: true, logoUrl: true, fbPageId: true, fbPageToken: true, telegramBotToken: true, telegramChatId: true, createdAt: true },
+      }),
+      prisma.turuuSettings.findUnique({
+        where: { orgId_key: { orgId: req.org.orgId, key: "business_type" } },
+      }),
+    ]);
+    res.json({ ...org, businessType: btSetting?.value || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
