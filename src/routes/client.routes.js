@@ -2298,14 +2298,15 @@ router.delete("/staff/:id", async (req, res) => {
 // ─── AVAILABILITY ─────────────────────────────────────────────────────────────
 
 function buildSlots(workStart, workEnd, durationMinutes) {
+  const dur = Math.max(1, Number(durationMinutes) || 60);
   const [sh, sm] = workStart.split(":").map(Number);
   const [eh, em] = workEnd.split(":").map(Number);
   let cur = sh * 60 + sm;
   const end = eh * 60 + em;
   const slots = [];
-  while (cur + durationMinutes <= end) {
+  while (cur + dur <= end) {
     slots.push(`${String(Math.floor(cur / 60)).padStart(2, "0")}:${String(cur % 60).padStart(2, "0")}`);
-    cur += durationMinutes;
+    cur += dur;
   }
   return slots;
 }
@@ -2335,9 +2336,9 @@ router.get("/availability", async (req, res) => {
     const bookedSlots = booked.map((b) => b.timeSlot);
 
     // Slot тооцоолол — service-үүдийн хамгийн урт duration ашиглана
-    const services = Array.isArray(staff.services) ? staff.services : JSON.parse(staff.services);
+    const services = Array.isArray(staff.services) ? staff.services : JSON.parse(staff.services || "[]");
     const duration = services.length > 0
-      ? Math.max(...services.map((s) => s.durationMinutes || 60))
+      ? Math.max(...services.map((s) => Number(s.durationMinutes) || 60))
       : 60;
 
     const allSlots = buildSlots(staff.workStart, staff.workEnd, duration);
@@ -2412,8 +2413,10 @@ router.get("/staff/:id/schedule", async (req, res) => {
     const apptMap = new Map(appointments.map((a) => [a.timeSlot, a]));
 
     const services = Array.isArray(staff.services) ? staff.services : JSON.parse(staff.services || "[]");
-    const duration = services.length > 0 ? Math.max(...services.map((s) => s.durationMinutes || 60)) : 60;
+    const rawDurations = services.map((s) => s.durationMinutes);
+    const duration = services.length > 0 ? Math.max(...services.map((s) => Number(s.durationMinutes) || 60)) : 60;
     const allSlots = buildSlots(staff.workStart, staff.workEnd, duration);
+    console.log("[SCHEDULE]", { staffId: req.params.id, date, dayOfWeek, workDays, workStart: staff.workStart, workEnd: staff.workEnd, rawDurations, duration, slotsCount: allSlots.length });
 
     const slots = allSlots.map((time) => {
       const appt = apptMap.get(time);
@@ -2441,7 +2444,7 @@ router.post("/staff/:id/block", async (req, res) => {
     if (existing) return res.status(400).json({ error: "Тухайн цаг захиалгатай байна" });
 
     const services = Array.isArray(staff.services) ? staff.services : JSON.parse(staff.services || "[]");
-    const duration = services.length > 0 ? Math.max(...services.map((s) => s.durationMinutes || 60)) : 60;
+    const duration = services.length > 0 ? Math.max(...services.map((s) => Number(s.durationMinutes) || 60)) : 60;
 
     const block = await prisma.turuuAppointment.create({
       data: { orgId: req.org.orgId, staffId: req.params.id, date, timeSlot, serviceName: "Хаасан цаг", durationMinutes: duration, status: "BLOCKED" },
