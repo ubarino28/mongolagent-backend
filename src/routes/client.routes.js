@@ -2350,8 +2350,9 @@ router.get("/appointments", async (req, res) => {
     const prisma = getPrisma();
     const where = {
       orgId: req.org.orgId,
+      status: { not: "BLOCKED" },
       ...(date   && { date }),
-      ...(status && { status }),
+      ...(status && { status: status as string }),
     };
     const [data, total] = await Promise.all([
       prisma.turuuAppointment.findMany({
@@ -2377,6 +2378,79 @@ router.put("/appointments/:id/status", async (req, res) => {
     if (!appt) return res.status(404).json({ error: "Олдсонгүй" });
     const updated = await prisma.turuuAppointment.update({ where: { id: req.params.id }, data: { status } });
     res.json(updated);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /client/staff/:id/schedule?date=YYYY-MM-DD
+// Тухайн мастерын өдрийн бүх slot-уудыг available/booked/blocked статустайгаар буцаана
+router.get("/staff/:id/schedule", async (req, res) => {
+  try {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ error: "date шаардлагатай" });
+    const prisma = getPrisma();
+    const staff = await prisma.turuuStaff.findFirst({ where: { id: req.params.id, orgId: req.org.orgId, isActive: true } });
+    if (!staff) return res.status(404).json({ error: "Мастер олдсонгүй" });
+
+    const dayOfWeek = new Date(`${date}T00:00:00`).getDay() || 7;
+    const workDays = Array.isArray(staff.workDays) ? staff.workDays : JSON.parse(staff.workDays || "[1,2,3,4,5]");
+    if (!workDays.includes(dayOfWeek)) {
+      return res.json({ slots: [], staffName: staff.name, offDay: true });
+    }
+
+    const appointments = await prisma.turuuAppointment.findMany({
+      where: { staffId: req.params.id, date, status: { not: "CANCELLED" } },
+      select: { id: true, timeSlot: true, status: true, customerName: true, serviceName: true },
+    });
+    const apptMap = new Map(appointments.map((a) => [a.timeSlot, a]));
+
+    const services = Array.isArray(staff.services) ? staff.services : JSON.parse(staff.services || "[]");
+    const duration = services.length > 0 ? Math.max(...services.map((s) => s.durationMinutes || 60)) : 60;
+    const allSlots = buildSlots(staff.workStart, staff.workEnd, duration);
+
+    const slots = allSlots.map((time) => {
+      const appt = apptMap.get(time);
+      if (!appt) return { time, status: "available" };
+      if (appt.status === "BLOCKED") return { time, status: "blocked", appointmentId: appt.id };
+      return { time, status: "booked", appointmentId: appt.id, customerName: appt.customerName, serviceName: appt.serviceName };
+    });
+
+    res.json({ slots, staffName: staff.name, offDay: false });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /client/staff/:id/block — тухайн мастерын цагийг гараар хаана
+router.post("/staff/:id/block", async (req, res) => {
+  try {
+    const { date, timeSlot } = req.body;
+    if (!date || !timeSlot) return res.status(400).json({ error: "date, timeSlot шаардлагатай" });
+    const prisma = getPrisma();
+    const staff = await prisma.turuuStaff.findFirst({ where: { id: req.params.id, orgId: req.org.orgId, isActive: true } });
+    if (!staff) return res.status(404).json({ error: "Мастер олдсонгүй" });
+
+    const existing = await prisma.turuuAppointment.findFirst({
+      where: { staffId: req.params.id, date, timeSlot, status: { not: "CANCELLED" } },
+    });
+    if (existing) return res.status(400).json({ error: "Тухайн цаг захиалгатай байна" });
+
+    const services = Array.isArray(staff.services) ? staff.services : JSON.parse(staff.services || "[]");
+    const duration = services.length > 0 ? Math.max(...services.map((s) => s.durationMinutes || 60)) : 60;
+
+    const block = await prisma.turuuAppointment.create({
+      data: { orgId: req.org.orgId, staffId: req.params.id, date, timeSlot, serviceName: "Хаасан цаг", durationMinutes: duration, status: "BLOCKED" },
+    });
+    res.json(block);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /client/appointments/:id — зөвхөн BLOCKED цагийг устгана (нээнэ)
+router.delete("/appointments/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const appt = await prisma.turuuAppointment.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!appt) return res.status(404).json({ error: "Олдсонгүй" });
+    if (appt.status !== "BLOCKED") return res.status(400).json({ error: "Зөвхөн хаасан цагийг устгаж болно" });
+    await prisma.turuuAppointment.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
