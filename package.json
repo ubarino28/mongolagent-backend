@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "prestart": "prisma generate",
     "dev": "nodemon src/index.js",
     "postinstall": "prisma generate",
     "db:push": "DATABASE_URL=\"$(echo $DATABASE_URL | sed 's/:6543/:5432/g')\" npx prisma db push",
