@@ -263,18 +263,20 @@ TOOL ДУУДАХ ДАРААЛАЛ
 
 async function buildSystemPrompt(isNew, orgId = null) {
   let bodyPrompt = null;
+  let businessType = null;
 
   try {
     const prisma = getPrisma();
     const settings = await prisma.turuuSettings.findMany({
       where: {
         orgId,
-        key: { in: ["system_prompt", "ai_profile", "ai_company", "ai_name", "ai_contact", "ai_extra_rules"] },
+        key: { in: ["system_prompt", "ai_profile", "ai_company", "ai_name", "ai_contact", "ai_extra_rules", "business_type"] },
       },
     });
 
     const s = {};
     settings.forEach((r) => { s[r.key] = r.value; });
+    businessType = s.business_type || null;
 
     // Priority: ai_profile (narrative) → system_prompt (custom) → ai_company (old)
     if (s.ai_profile) {
@@ -339,18 +341,20 @@ async function buildSystemPrompt(isNew, orgId = null) {
       const prismaInst = getPrisma();
       const staffCount = await prismaInst.turuuStaff.count({ where: { orgId, isActive: true } });
       if (staffCount > 0) {
+        const { getLabels } = require("./businessType");
+        const lbl = getLabels(businessType);
         appointmentBlock = `━━━━━━━━━━━━━━━━━━━━━━━━━
-ЦАГИЙН ЗАХИАЛГА
+${lbl.appointment.toUpperCase()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 Хэрэглэгч цаг захиалах, цаг авах, appointment хүсвэл:
-1. check_staff дуудаж мастеруудын жагсаалт, тэдний үйлчилгээ, ажлын цагийг ол
-2. Олон мастер байвал → "Аль мастертай цаг авах вэ?" гэж нэг асуулт асуу
-3. Мастер тодорхойлогдсон бол → ямар үйлчилгээ авах вэ гэдгийг ол (check_staff-ийн жагсаалтаас)
+1. check_staff дуудаж ${lbl.staffPlural} жагсаалт, тэдний үйлчилгээ, ажлын цагийг ол
+2. Олон ${lbl.staff} байвал → "Аль ${lbl.staffWith} цаг авах вэ?" гэж нэг асуулт асуу
+3. ${lbl.staffCap} тодорхойлогдсон бол → ямар үйлчилгээ авах вэ гэдгийг ол (check_staff-ийн жагсаалтаас)
 4. Ямар өдөр авах вэ гэдгийг ол → огноог YYYY-MM-DD болгоно
 5. check_availability(staffId, date, serviceName) дуудаж боломжит цагуудыг ол
    → Цагуудыг тоочин харуул → хэрэглэгч нэгийг сонгосны дараа цааш яв
 6. Нэр, утасны дугаар ав
-7. БАТАЛГААЖУУЛ: "Цаг захиалгаа баталгаажуулна уу?\\n📅 [date] [timeSlot]\\n💆 Мастер: [staffName]\\n✂️ Үйлчилгээ: [serviceName]\\n👤 [customerName]\\n📞 [customerPhone]\\nЗөв үү?"
+7. БАТАЛГААЖУУЛ: "Цаг захиалгаа баталгаажуулна уу?\\n📅 [date] [timeSlot]\\n💆 ${lbl.staffCap}: [staffName]\\n✂️ Үйлчилгээ: [serviceName]\\n👤 [customerName]\\n📞 [customerPhone]\\nЗөв үү?"
 8. Баталгаажуулсны дараа save_appointment дуудна → "Цагаа амжилттай захиаллаа! 🎉"
 ✗ check_availability дуудалгүй цаг санал болгохгүй
 ✗ save_appointment дуудахын өмнө нэр болон утас ЗААВАЛ авсан байна`;

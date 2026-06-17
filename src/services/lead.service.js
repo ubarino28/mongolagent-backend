@@ -91,8 +91,14 @@ async function saveAppointment({ psid, orgId = null, staffId, staffName, service
   });
 
   const { botToken, chatId } = await getTelegramConfig(orgId);
+  let staffKeyLabel = "Мастер";
+  try {
+    const bt = await prisma.turuuSettings.findUnique({ where: { orgId_key: { orgId, key: "business_type" } } });
+    const { getLabels } = require("../lib/businessType");
+    staffKeyLabel = getLabels(bt?.value).telegramKey;
+  } catch { /* fallback */ }
   await notifyTelegram("📅 Шинэ цаг захиалга", {
-    Мастер:      staffName || staffId,
+    [staffKeyLabel]: staffName || staffId,
     Үйлчилгээ:   serviceName,
     Огноо:       `${date} ${timeSlot}`,
     Хэрэглэгч:   customerName,
