@@ -2390,14 +2390,14 @@ router.put("/appointments/:id/status", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /client/staff/:id/schedule?date=YYYY-MM-DD
+// GET /client/schedule?staffId=UUID&date=YYYY-MM-DD
 // Тухайн мастерын өдрийн бүх slot-уудыг available/booked/blocked статустайгаар буцаана
-router.get("/staff/:id/schedule", async (req, res) => {
+router.get("/schedule", async (req, res) => {
   try {
-    const { date } = req.query;
-    if (!date) return res.status(400).json({ error: "date шаардлагатай" });
+    const { staffId, date } = req.query;
+    if (!staffId || !date) return res.status(400).json({ error: "staffId, date шаардлагатай" });
     const prisma = getPrisma();
-    const staff = await prisma.turuuStaff.findFirst({ where: { id: req.params.id, orgId: req.org.orgId, isActive: true } });
+    const staff = await prisma.turuuStaff.findFirst({ where: { id: staffId, orgId: req.org.orgId, isActive: true } });
     if (!staff) return res.status(404).json({ error: "Мастер олдсонгүй" });
 
     const dayOfWeek = new Date(`${date}T00:00:00`).getDay() || 7;
@@ -2407,7 +2407,7 @@ router.get("/staff/:id/schedule", async (req, res) => {
     }
 
     const appointments = await prisma.turuuAppointment.findMany({
-      where: { staffId: req.params.id, date, status: { not: "CANCELLED" } },
+      where: { staffId, date, status: { not: "CANCELLED" } },
       select: { id: true, timeSlot: true, status: true, customerName: true, serviceName: true },
     });
     const apptMap = new Map(appointments.map((a) => [a.timeSlot, a]));
@@ -2416,7 +2416,7 @@ router.get("/staff/:id/schedule", async (req, res) => {
     const rawDurations = services.map((s) => s.durationMinutes);
     const duration = services.length > 0 ? Math.max(...services.map((s) => Number(s.durationMinutes) || 60)) : 60;
     const allSlots = buildSlots(staff.workStart, staff.workEnd, duration);
-    console.log("[SCHEDULE]", { staffId: req.params.id, date, dayOfWeek, workDays, workStart: staff.workStart, workEnd: staff.workEnd, rawDurations, duration, slotsCount: allSlots.length });
+    console.log("[SCHEDULE]", { staffId, date, dayOfWeek, workDays, workStart: staff.workStart, workEnd: staff.workEnd, rawDurations, duration, slotsCount: allSlots.length });
 
     const slots = allSlots.map((time) => {
       const appt = apptMap.get(time);
@@ -2429,17 +2429,17 @@ router.get("/staff/:id/schedule", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// POST /client/staff/:id/block — тухайн мастерын цагийг гараар хаана
-router.post("/staff/:id/block", async (req, res) => {
+// POST /client/schedule/block — тухайн мастерын цагийг гараар хаана
+router.post("/schedule/block", async (req, res) => {
   try {
-    const { date, timeSlot } = req.body;
-    if (!date || !timeSlot) return res.status(400).json({ error: "date, timeSlot шаардлагатай" });
+    const { staffId, date, timeSlot } = req.body;
+    if (!staffId || !date || !timeSlot) return res.status(400).json({ error: "staffId, date, timeSlot шаардлагатай" });
     const prisma = getPrisma();
-    const staff = await prisma.turuuStaff.findFirst({ where: { id: req.params.id, orgId: req.org.orgId, isActive: true } });
+    const staff = await prisma.turuuStaff.findFirst({ where: { id: staffId, orgId: req.org.orgId, isActive: true } });
     if (!staff) return res.status(404).json({ error: "Мастер олдсонгүй" });
 
     const existing = await prisma.turuuAppointment.findFirst({
-      where: { staffId: req.params.id, date, timeSlot, status: { not: "CANCELLED" } },
+      where: { staffId, date, timeSlot, status: { not: "CANCELLED" } },
     });
     if (existing) return res.status(400).json({ error: "Тухайн цаг захиалгатай байна" });
 
@@ -2447,7 +2447,7 @@ router.post("/staff/:id/block", async (req, res) => {
     const duration = services.length > 0 ? Math.max(...services.map((s) => Number(s.durationMinutes) || 60)) : 60;
 
     const block = await prisma.turuuAppointment.create({
-      data: { orgId: req.org.orgId, staffId: req.params.id, date, timeSlot, serviceName: "Хаасан цаг", durationMinutes: duration, status: "BLOCKED" },
+      data: { orgId: req.org.orgId, staffId, date, timeSlot, serviceName: "Хаасан цаг", durationMinutes: duration, status: "BLOCKED" },
     });
     res.json(block);
   } catch (e) { res.status(500).json({ error: e.message }); }
