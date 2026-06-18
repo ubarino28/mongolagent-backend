@@ -2391,10 +2391,11 @@ router.put("/appointments/:id/status", async (req, res) => {
 });
 
 // GET /client/schedule?staffId=UUID&date=YYYY-MM-DD
-// Тухайн мастерын өдрийн бүх slot-уудыг available/booked/blocked статустайгаар буцаана
-router.get("/schedule", async (req, res) => {
+// GET /client/staff/:id/schedule?date=YYYY-MM-DD  (backwards-compatible)
+async function handleSchedule(req, res) {
   try {
-    const { staffId, date } = req.query;
+    const staffId = req.query.staffId || req.params.id;
+    const { date } = req.query;
     if (!staffId || !date) return res.status(400).json({ error: "staffId, date шаардлагатай" });
     const prisma = getPrisma();
     const staff = await prisma.turuuStaff.findFirst({ where: { id: staffId, orgId: req.org.orgId, isActive: true } });
@@ -2427,12 +2428,16 @@ router.get("/schedule", async (req, res) => {
 
     res.json({ slots, staffName: staff.name, offDay: false });
   } catch (e) { res.status(500).json({ error: e.message }); }
-});
+}
+router.get("/schedule", handleSchedule);
+router.get("/staff/:id/schedule", handleSchedule);
 
 // POST /client/schedule/block — тухайн мастерын цагийг гараар хаана
-router.post("/schedule/block", async (req, res) => {
+// POST /client/staff/:id/block  (backwards-compatible)
+async function handleBlock(req, res) {
   try {
-    const { staffId, date, timeSlot } = req.body;
+    const staffId = req.body.staffId || req.params.id;
+    const { date, timeSlot } = req.body;
     if (!staffId || !date || !timeSlot) return res.status(400).json({ error: "staffId, date, timeSlot шаардлагатай" });
     const prisma = getPrisma();
     const staff = await prisma.turuuStaff.findFirst({ where: { id: staffId, orgId: req.org.orgId, isActive: true } });
@@ -2451,7 +2456,9 @@ router.post("/schedule/block", async (req, res) => {
     });
     res.json(block);
   } catch (e) { res.status(500).json({ error: e.message }); }
-});
+}
+router.post("/schedule/block", handleBlock);
+router.post("/staff/:id/block", handleBlock);
 
 // DELETE /client/appointments/:id — зөвхөн BLOCKED цагийг устгана (нээнэ)
 router.delete("/appointments/:id", async (req, res) => {
