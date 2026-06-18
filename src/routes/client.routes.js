@@ -2361,7 +2361,7 @@ router.get("/appointments", async (req, res) => {
       orgId: req.org.orgId,
       status: { not: "BLOCKED" },
       ...(date   && { date }),
-      ...(status && { status: status as string }),
+      ...(status && { status: String(status) }),
     };
     const [data, total] = await Promise.all([
       prisma.turuuAppointment.findMany({
