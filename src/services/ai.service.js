@@ -373,7 +373,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   // Зурагтай мессеж бол vision хэлбэрээр илгээнэ (/client/chat-тай адил)
   const userContent = imageUrl
     ? [
-        { type: "image_url", image_url: { url: imageUrl, detail: "low" } },
+        { type: "image_url", image_url: { url: imageUrl, detail: "auto" } },
         { type: "text", text: userText || "Энэ зурагт байгаа барааны тухай асууж байна." },
       ]
     : userText;
@@ -562,7 +562,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         { type: "text", text: "Эдгээр нь мэдлэгийн санд хадгалагдсан хувилбаруудын зургууд. Хэрэглэгчийн илгээсэн зурагтай (дээрх) нэг нэгээр харьцуулж, аль нь тохирохыг тодорхойл:" },
       ];
       uniqueImages.forEach((v) => {
-        comparisonContent.push({ type: "image_url", image_url: { url: v.imageUrl, detail: "low" } });
+        comparisonContent.push({ type: "image_url", image_url: { url: v.imageUrl, detail: "auto" } });
         comparisonContent.push({ type: "text", text: `↑ Дээрх зураг: ${v.label}` });
       });
       followUpMessages.push({ role: "user", content: comparisonContent });
