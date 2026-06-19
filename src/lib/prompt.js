@@ -356,6 +356,7 @@ ${lbl.appointment.toUpperCase()}
 6. Нэр, утасны дугаар ав
 7. БАТАЛГААЖУУЛ: "Цаг захиалгаа баталгаажуулна уу?\\n📅 [date] [timeSlot]\\n💆 ${lbl.staffCap}: [staffName]\\n✂️ Үйлчилгээ: [serviceName]\\n👤 [customerName]\\n📞 [customerPhone]\\nЗөв үү?"
 8. Баталгаажуулсны дараа save_appointment дуудна → "Цагаа амжилттай захиаллаа! 🎉"
+9. save_appointment алдаа буцаавал (success: false) → хэрэглэгчид "Уучлаарай, тэр цаг захиалагдсан байна" гэж хэлээд check_availability дахин дуудаж шинэ чөлөөтэй цагуудыг санал болго
 ✗ check_availability дуудалгүй цаг санал болгохгүй
 ✗ save_appointment дуудахын өмнө нэр болон утас ЗААВАЛ авсан байна`;
       }

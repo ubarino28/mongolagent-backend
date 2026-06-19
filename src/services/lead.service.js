@@ -86,6 +86,14 @@ async function saveAppointment({ psid, orgId = null, staffId, staffName, service
     if (recent) return { ...recent, duplicate: true };
   }
 
+  // Давхар захиалга шалгах: тухайн мастерын тухайн цагт өөр захиалга байвал хориглоно
+  const conflict = await prisma.turuuAppointment.findFirst({
+    where: { staffId, date, timeSlot, status: { not: "CANCELLED" } },
+  });
+  if (conflict) {
+    throw new Error(`Уучлаарай, ${timeSlot} цаг аль хэдийн захиалагдсан байна. Өөр цаг сонгоно уу.`);
+  }
+
   const appt = await prisma.turuuAppointment.create({
     data: { psid, orgId, staffId, serviceName, durationMinutes, date, timeSlot, customerName, customerPhone, depositAmount, notes },
   });
