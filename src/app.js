@@ -17,6 +17,9 @@ const { getPrisma } = require("./lib/db");
     await prisma.$executeRawUnsafe(
       `ALTER TABLE "TuruuKnowledge" ADD COLUMN IF NOT EXISTS "variants" JSONB`
     );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "TuruuStaff" ADD COLUMN IF NOT EXISTS "bufferMinutes" INTEGER DEFAULT 0`
+    );
   } catch (e) {
     console.warn("[migration] variants column:", e.message);
   }

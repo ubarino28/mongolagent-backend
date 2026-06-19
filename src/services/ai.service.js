@@ -522,7 +522,8 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
               } else {
                 duration = services.reduce((max, s) => Math.max(max, s.durationMinutes || 60), 60);
               }
-              const allSlots = buildSlots(staff.workStart, staff.workEnd, duration);
+              const buffer = Number(staff.bufferMinutes) || 0;
+              const allSlots = buildSlots(staff.workStart, staff.workEnd, duration + buffer);
               const available = allSlots.filter((s) => !bookedTimes.has(s));
               toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ availableSlots: available, staffName: staff.name }) });
             }
