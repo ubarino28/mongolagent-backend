@@ -1131,7 +1131,12 @@ ${RESTART_BLOCK}`;
         }
 
         if (toolCall.function.name === "clear_knowledge") {
-          await prisma.turuuKnowledge.deleteMany({ where: { orgId } });
+          await Promise.all([
+            prisma.turuuKnowledge.deleteMany({ where: { orgId } }),
+            prisma.turuuAppointment.deleteMany({ where: { orgId } }),
+            prisma.turuuStaff.deleteMany({ where: { orgId } }),
+            prisma.turuuSettings.deleteMany({ where: { orgId, key: { in: ["business_type", "ai_name", "ai_tone"] } } }),
+          ]);
           cleared = true;
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true }) });
         }
