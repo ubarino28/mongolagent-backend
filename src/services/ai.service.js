@@ -534,7 +534,9 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
       } else if (toolCall.function.name === "save_appointment") {
         try {
           const appt = await saveAppointment({ psid, orgId, ...args });
-          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true, duplicate: appt.duplicate || false }) });
+          const result = { success: true, duplicate: appt.duplicate || false };
+          if (appt.qpayData) result.qpay = appt.qpayData;
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify(result) });
         } catch (e) {
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: e.message }) });
         }
