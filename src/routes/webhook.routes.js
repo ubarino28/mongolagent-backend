@@ -149,6 +149,46 @@ router.post("/qpay/:orderId", async (req, res) => {
   });
 });
 
+// Store (website builder) QPay callback — POST /webhook/qpay-store/:orderId
+router.post("/qpay-store/:orderId", async (req, res) => {
+  res.json({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      const prisma = getPrisma();
+      const order = await prisma.storeOrder.findUnique({ where: { id: req.params.orderId } });
+      if (!order?.qpayInvoiceId || order.qpayStatus === "PAID") return;
+
+      const result = await checkPayment(order.qpayInvoiceId);
+      if (result.invoice_status !== "PAID") return;
+
+      await prisma.storeOrder.update({
+        where: { id: order.id },
+        data: { qpayStatus: "PAID", status: "PAID" },
+      });
+
+      // Telegram мэдэгдэл
+      try {
+        const org = await prisma.organization.findUnique({
+          where: { id: order.orgId },
+          select: { telegramBotToken: true, telegramChatId: true },
+        });
+        const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+        const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+        if (botToken && chatId) {
+          const axios = require("axios");
+          const text = `🛒 Дэлгүүрийн захиалга төлөгдлөө!\nЗахиалга #${order.id.slice(-6).toUpperCase()}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}\nУтас: ${order.customerPhone || "—"}`;
+          await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
+        }
+      } catch { /* non-blocking */ }
+
+      console.log(`[QPay-store] Order ${order.id} PAID`);
+    } catch (err) {
+      console.error("[QPay-store callback]", err.message);
+    }
+  });
+});
+
 // Appointment QPay callback — POST /webhook/qpay-appointment/:appointmentId
 router.post("/qpay-appointment/:appointmentId", async (req, res) => {
   res.json({ ok: true });
