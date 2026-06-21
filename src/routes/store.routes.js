@@ -83,7 +83,9 @@ router.post("/", async (req, res) => {
     const template = templateId ? getTemplate(templateId) : null;
     const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { slug: true, name: true } });
 
-    const storeSlug = await uniqueStoreSlug(prisma, slug || org?.slug || req.org.slug, null);
+    // Домэйн (subdomain)-г дэлгүүрийн нэрнээс үүсгэнэ (жишээ: "Inca" → inca.mongolagent.mn).
+    // Хэрэглэгч тусгай slug дамжуулсан бол түүнийг, эс бөгөөс нэрийг, эцэст нь org slug-г ашиглана.
+    const storeSlug = await uniqueStoreSlug(prisma, slug || name || org?.slug || req.org.slug, null);
     const theme = template?.theme || {};
 
     const store = await prisma.store.create({
