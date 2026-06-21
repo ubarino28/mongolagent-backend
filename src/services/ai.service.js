@@ -373,7 +373,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   // Зурагтай мессеж бол vision хэлбэрээр илгээнэ (/client/chat-тай адил)
   const userContent = imageUrl
     ? [
-        { type: "image_url", image_url: { url: imageUrl, detail: "low" } },
+        { type: "image_url", image_url: { url: imageUrl, detail: "auto" } },
         { type: "text", text: userText || "Энэ зурагт байгаа барааны тухай асууж байна." },
       ]
     : userText;
@@ -522,7 +522,8 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
               } else {
                 duration = services.reduce((max, s) => Math.max(max, s.durationMinutes || 60), 60);
               }
-              const allSlots = buildSlots(staff.workStart, staff.workEnd, duration);
+              const buffer = Number(staff.bufferMinutes) || 0;
+              const allSlots = buildSlots(staff.workStart, staff.workEnd, duration + buffer);
               const available = allSlots.filter((s) => !bookedTimes.has(s));
               toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ availableSlots: available, staffName: staff.name }) });
             }
@@ -534,7 +535,9 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
       } else if (toolCall.function.name === "save_appointment") {
         try {
           const appt = await saveAppointment({ psid, orgId, ...args });
-          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true, duplicate: appt.duplicate || false }) });
+          const result = { success: true, duplicate: appt.duplicate || false };
+          if (appt.qpayData) result.qpay = appt.qpayData;
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify(result) });
         } catch (e) {
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: e.message }) });
         }
@@ -562,7 +565,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         { type: "text", text: "Эдгээр нь мэдлэгийн санд хадгалагдсан хувилбаруудын зургууд. Хэрэглэгчийн илгээсэн зурагтай (дээрх) нэг нэгээр харьцуулж, аль нь тохирохыг тодорхойл:" },
       ];
       uniqueImages.forEach((v) => {
-        comparisonContent.push({ type: "image_url", image_url: { url: v.imageUrl, detail: "low" } });
+        comparisonContent.push({ type: "image_url", image_url: { url: v.imageUrl, detail: "auto" } });
         comparisonContent.push({ type: "text", text: `↑ Дээрх зураг: ${v.label}` });
       });
       followUpMessages.push({ role: "user", content: comparisonContent });

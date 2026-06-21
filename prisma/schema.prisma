@@ -161,7 +161,7 @@ model TuruuStaff {
   workDays     Json                @default("[1,2,3,4,5]")
   workStart    String              @default("09:00")
   workEnd      String              @default("18:00")
-  bufferMinutes Int?               @default(0)
+  bufferMinutes Int                @default(0)
   isActive     Boolean             @default(true)
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
