@@ -110,6 +110,23 @@ router.post("/", async (req, res) => {
               })),
             }
           : undefined,
+        // Template-ийн demo бараа — дэлгүүр шууд дүүрэн харагдана
+        products: template?.demoProducts
+          ? {
+              create: template.demoProducts.map((p, i) => ({
+                orgId: req.org.orgId,
+                name: p.name,
+                description: p.description || null,
+                price: p.price,
+                compareAtPrice: p.compareAtPrice ?? null,
+                images: p.images || [],
+                category: p.category || null,
+                stock: 50,
+                active: true,
+                sortOrder: i,
+              })),
+            }
+          : undefined,
       },
       include: { pages: true },
     });
@@ -165,6 +182,51 @@ router.put("/", async (req, res) => {
     }
 
     res.json({ store: updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /store/apply-template — сонгосон загварыг одоо байгаа дэлгүүрт хэрэглэх
+router.post("/apply-template", async (req, res) => {
+  try {
+    const { templateId } = req.body;
+    const template = getTemplate(templateId);
+    if (!template) return res.status(400).json({ error: "Загвар олдсонгүй" });
+
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    // theme + загвар шинэчилнэ
+    await prisma.store.update({ where: { id: store.id }, data: { templateId, theme: template.theme } });
+
+    // нүүр хуудсыг загварын агуулгаар тавина
+    const home = template.pages.find((p) => p.path === "/") || template.pages[0];
+    const existingHome = await prisma.storePage.findFirst({ where: { storeId: store.id, path: "/" } });
+    if (existingHome) {
+      await prisma.storePage.update({ where: { id: existingHome.id }, data: { content: home.content, title: home.title, published: true } });
+    } else {
+      await prisma.storePage.create({ data: { storeId: store.id, title: home.title, path: "/", type: home.type, content: home.content, published: true, sortOrder: 0 } });
+    }
+
+    // бараа байхгүй бол demo бараа seed хийнэ
+    const productCount = await prisma.product.count({ where: { storeId: store.id } });
+    let seeded = 0;
+    if (productCount === 0 && template.demoProducts?.length) {
+      await prisma.product.createMany({
+        data: template.demoProducts.map((p, i) => ({
+          storeId: store.id, orgId: req.org.orgId, name: p.name, description: p.description || null,
+          price: p.price, compareAtPrice: p.compareAtPrice ?? null, images: p.images || [],
+          category: p.category || null, stock: 50, active: true, sortOrder: i,
+        })),
+      });
+      seeded = template.demoProducts.length;
+    }
+
+    const updated = await prisma.store.findUnique({
+      where: { id: store.id },
+      include: { _count: { select: { products: true, pages: true, orders: true } } },
+    });
+    res.json({ store: updated, seededProducts: seeded });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
