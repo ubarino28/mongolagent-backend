@@ -24,7 +24,7 @@ const TEMPLATES = [
     name: "Aurora",
     description: "Хувцас, загварын дэлгүүрт тохирох гоёмсог, цэвэрхэн загвар.",
     category: "Хувцас",
-    theme: { primaryColor: "#111111", bgColor: "#ffffff", textColor: "#1a1a1a", font: "Playfair Display" },
+    theme: { primaryColor: "#111111", bgColor: "#ffffff", textColor: "#1a1a1a", font: "Lora" },
     pages: homePage({
       root: { props: { title: "Нүүр" } },
       content: [
@@ -78,7 +78,7 @@ const TEMPLATES = [
     name: "Bloom",
     description: "Гоо сайхан, арьс арчилгааны бараанд тохирох зөөлөн загвар.",
     category: "Гоо сайхан",
-    theme: { primaryColor: "#db2777", bgColor: "#fff7fb", textColor: "#3f1d2e", font: "Poppins" },
+    theme: { primaryColor: "#db2777", bgColor: "#fff7fb", textColor: "#3f1d2e", font: "Montserrat" },
     pages: homePage({
       root: { props: { title: "Нүүр" } },
       content: [
