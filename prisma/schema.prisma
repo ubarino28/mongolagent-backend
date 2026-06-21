@@ -35,6 +35,7 @@ model Organization {
   updatedAt           DateTime @updatedAt
 
   orders TuruuOrder[]
+  store  Store?
 }
 
 model PasswordResetToken {
@@ -160,6 +161,7 @@ model TuruuStaff {
   workDays     Json                @default("[1,2,3,4,5]")
   workStart    String              @default("09:00")
   workEnd      String              @default("18:00")
+  bufferMinutes Int?               @default(0)
   isActive     Boolean             @default(true)
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
@@ -188,4 +190,84 @@ model TuruuAppointment {
   notes           String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// Website builder (Mongol Agent Website)
+// ─────────────────────────────────────────────
+
+model Store {
+  id           String   @id @default(uuid())
+  orgId        String   @unique
+  org          Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name         String
+  slug         String   @unique          // subdomain: slug.mongolagent.mn
+  customDomain String?  @unique          // хэрэглэгчийн өөрийн домэйн (Phase 4)
+  status       String   @default("draft") // draft | published
+  templateId   String?                    // сонгосон template
+  theme        Json     @default("{}")    // өнгө, фонт, лого г.м
+  currency     String   @default("MNT")
+  publishedAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  pages    StorePage[]
+  products Product[]
+  orders   StoreOrder[]
+}
+
+model StorePage {
+  id        String   @id @default(uuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  title     String
+  path      String                       // "/", "/about", "/contact"
+  type      String   @default("custom")  // home | about | contact | custom
+  content   Json     @default("{}")      // Puck drag-and-drop блокууд
+  published Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([storeId, path])
+}
+
+model Product {
+  id             String   @id @default(uuid())
+  storeId        String
+  store          Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orgId          String
+  name           String
+  description    String?
+  price          Float    @default(0)
+  compareAtPrice Float?
+  images         Json     @default("[]")
+  stock          Int      @default(0)
+  sku            String?
+  category       String?
+  active         Boolean  @default(true)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model StoreOrder {
+  id              String   @id @default(uuid())
+  storeId         String
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orgId           String
+  customerName    String?
+  customerPhone   String?
+  customerEmail   String?
+  deliveryAddress String?
+  items           Json     @default("[]") // сагсны бараанууд
+  totalAmount     Float    @default(0)
+  status          String   @default("NEW") // NEW | PAID | SHIPPED | DONE | CANCELLED
+  notes           String?
+  qpayInvoiceId   String?
+  qpayQrText      String?
+  qpayUrls        Json?
+  qpayStatus      String?  @default("PENDING")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
