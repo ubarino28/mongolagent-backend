@@ -95,6 +95,9 @@ router.post("/", async (req, res) => {
         slug: storeSlug,
         templateId: templateId || null,
         theme,
+        // Дэлгүүр үүсэмгүй шууд амьд (нийтлэх алхамгүй)
+        status: "published",
+        publishedAt: new Date(),
         pages: template
           ? {
               create: template.pages.map((p, i) => ({
@@ -111,7 +114,11 @@ router.post("/", async (req, res) => {
       include: { pages: true },
     });
 
-    res.json({ store });
+    // Домэйнийг ҮҮСГЭХ агшинд бүртгэнэ — SSL ард нь шууд эхэлж, хэрэглэгч бараагаа
+    // нэмж байх зуур бэлэн болно (линк шууд ажиллана).
+    const domain = await vercel.addStoreDomain(store.slug);
+
+    res.json({ store, domain });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -210,7 +217,7 @@ router.post("/pages", async (req, res) => {
 
     const count = await prisma.storePage.count({ where: { storeId: store.id } });
     const page = await prisma.storePage.create({
-      data: { storeId: store.id, title, path: normPath, type: type || "custom", content: content || {}, sortOrder: count },
+      data: { storeId: store.id, title, path: normPath, type: type || "custom", content: content || {}, published: true, sortOrder: count },
     });
     res.json({ page });
   } catch (e) { res.status(500).json({ error: e.message }); }
