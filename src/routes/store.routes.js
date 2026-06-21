@@ -5,6 +5,7 @@ const { createClient } = require("@supabase/supabase-js");
 const { getPrisma } = require("../lib/db");
 const { clientAuthMiddleware } = require("../middleware/clientAuth");
 const { listTemplates, getTemplate } = require("../lib/storeTemplates");
+const vercel = require("../services/vercel.service");
 
 const router = express.Router();
 
@@ -147,6 +148,13 @@ router.put("/", async (req, res) => {
     }
 
     const updated = await prisma.store.update({ where: { id: store.id }, data });
+
+    // slug өөрчлөгдсөн бөгөөд нийтлэгдсэн байвал Vercel домэйнийг шинэчилнэ
+    if (data.slug && store.slug !== data.slug && store.status === "published") {
+      await vercel.removeStoreDomain(store.slug);
+      await vercel.addStoreDomain(data.slug);
+    }
+
     res.json({ store: updated });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -163,7 +171,12 @@ router.post("/publish", async (req, res) => {
       where: { id: store.id },
       data: { status: publish ? "published" : "draft", publishedAt: publish ? new Date() : store.publishedAt },
     });
-    res.json({ store: updated });
+
+    // Нийтлэхэд {slug}.mongolagent.mn-г Vercel store project-д бүртгэнэ (SSL автоматаар)
+    let domain = null;
+    if (publish) domain = await vercel.addStoreDomain(updated.slug);
+
+    res.json({ store: updated, domain });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
