@@ -131,9 +131,9 @@ router.post("/", async (req, res) => {
       include: { pages: true },
     });
 
-    // Домэйнийг ҮҮСГЭХ агшинд бүртгэнэ — SSL ард нь шууд эхэлж, хэрэглэгч бараагаа
-    // нэмж байх зуур бэлэн болно (линк шууд ажиллана).
-    const domain = await vercel.addStoreDomain(store.slug);
+    // Домэйнийг ҮҮСГЭХ агшинд бүртгэж, SSL гарах хүртэл хүлээнэ (гацвал автоматаар
+    // дахин trigger хийнэ) — ингэснээр линк үүсэмгүй шууд ажиллана.
+    const domain = await vercel.ensureStoreDomain(store.slug);
 
     res.json({ store, domain });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -185,6 +185,18 @@ router.put("/", async (req, res) => {
     }
 
     res.json({ store: updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /store/recheck-domain — домэйн/SSL ажиллахгүй байвал дахин шалгаж засах
+router.post("/recheck-domain", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { slug: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    // Хэрэглэгч дарж байгаа учир шууд дахин trigger хийгээд хүлээнэ
+    const r = await vercel.ensureStoreDomain(store.slug, { maxWaitMs: 25000, nudgeAfterMs: 0 });
+    res.json(r);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
