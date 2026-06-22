@@ -599,6 +599,14 @@ router.get("/domain/search", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /store/domain/tlds — TLD бүрийн суурь үнэ (жагсаалтад)
+router.get("/domain/tlds", async (req, res) => {
+  try {
+    if (!vdomains.enabled()) return res.status(503).json({ error: "Домэйн үйлчилгээ идэвхгүй байна" });
+    res.json({ tlds: await vdomains.tldPrices() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /store/domain/purchase { domain } — QPay invoice үүсгэнэ
 router.post("/domain/purchase", async (req, res) => {
   try {

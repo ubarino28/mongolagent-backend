@@ -69,6 +69,22 @@ async function search(q) {
   return results.sort((a, b) => (Number(b.available) - Number(a.available)) || (order(a) - order(b)));
 }
 
+// TLD бүрийн суурь үнэ (нэрээс хамаарахгүй) — жагсаалтад харуулна. 6 цаг cache.
+let _tldCache = null, _tldCacheAt = 0;
+async function tldPrices() {
+  if (_tldCache && Date.now() - _tldCacheAt < 6 * 3600 * 1000) return _tldCache;
+  const out = await Promise.all(OFFER_TLDS.map(async (tld) => {
+    try {
+      const pd = await priceData(`pricecheck1742.${tld}`);
+      if (pd.purchasePrice == null) return null;
+      return { tld, priceMnt: toMnt(pd.purchasePrice), renewalMnt: toMnt(pd.renewalPrice ?? pd.purchasePrice) };
+    } catch { return null; }
+  }));
+  _tldCache = out.filter(Boolean);
+  _tldCacheAt = Date.now();
+  return _tldCache;
+}
+
 // Домэйн худалдаж авах (Vercel картаас цэнэглэнэ)
 async function buy(domain, { expectedPrice, years = 1, renew = true } = {}) {
   const body = { name: domain, expectedPrice, years, renew };
@@ -80,4 +96,4 @@ async function orderStatus(orderId) {
   return r.data;
 }
 
-module.exports = { enabled, search, availability, priceData, buy, orderStatus, toMnt, baseName, OFFER_TLDS };
+module.exports = { enabled, search, tldPrices, availability, priceData, buy, orderStatus, toMnt, baseName, OFFER_TLDS };
