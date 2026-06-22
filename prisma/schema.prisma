@@ -256,6 +256,24 @@ model Product {
   updatedAt      DateTime @updatedAt
 }
 
+model DomainOrder {
+  id            String   @id @default(uuid())
+  storeId       String
+  orgId         String
+  domain        String                          // худалдаж авах домэйн (миний.com)
+  priceMnt      Float    @default(0)            // хэрэглэгчээс авах MNT үнэ
+  priceUsd      Float    @default(0)            // Vercel-ийн USD үнэ
+  status        String   @default("pending")    // pending | paid | registered | failed
+  qpayInvoiceId String?
+  qpayQrText    String?
+  qpayUrls      Json?
+  qpayStatus    String?  @default("PENDING")
+  vercelOrderId String?
+  errorMsg      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 model Discount {
   id        String   @id @default(uuid())
   storeId   String
