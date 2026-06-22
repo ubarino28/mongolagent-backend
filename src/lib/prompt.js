@@ -427,7 +427,14 @@ ${lbl.appointment.toUpperCase()}
   }
 
   let restaurantBlock = "";
-  if (businessType === "restaurant") {
+  let hasTable = false;
+  if (orgId) {
+    try {
+      const tc = await getPrisma().turuuTable.count({ where: { orgId, isActive: true } });
+      hasTable = tc > 0;
+    } catch {}
+  }
+  if (hasTable || businessType === "restaurant") {
     restaurantBlock = `━━━━━━━━━━━━━━━━━━━━━━━━━
 РЕСТОРАН: МЕНЮ + ШИРЭЭ ЗАХИАЛГА
 ━━━━━━━━━━━━━━━━━━━━━━━━━
