@@ -16,20 +16,19 @@ const axios = require("axios");
 const BASE = "https://api.vercel.com/v1/registrar";
 const TOKEN = process.env.VERCEL_REGISTRAR_TOKEN || process.env.VERCEL_TOKEN;
 const TEAM = process.env.VERCEL_TEAM_ID;
-const FX = Number(process.env.DOMAIN_USD_MNT) || 3600;
-const MARKUP = (Number(process.env.DOMAIN_MARKUP_PCT) || 40) / 100;
+const FX = Number(process.env.DOMAIN_USD_MNT) || 3700;          // буфертэй ханш
+const FLAT = Number(process.env.DOMAIN_FLAT_MARKUP) || 30000;  // домэйн тутамд тогтмол ашиг
 
-// Хэрэглэгчид санал болгох TLD-ууд
-const OFFER_TLDS = ["com", "store", "shop", "online", "site", "xyz", "net", "co"];
+// Хэрэглэгчид санал болгох 15 TLD
+const OFFER_TLDS = ["com", "store", "shop", "online", "site", "xyz", "net", "co", "org", "biz", "info", "app", "me", "club", "pro"];
 
 function enabled() { return !!TOKEN; }
 function headers() { return { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" }; }
 function teamQ(prefix = "?") { return TEAM ? `${prefix}teamId=${TEAM}` : ""; }
 
-// USD → MNT (markup + 1000-д бөөрөнхийлнө)
+// USD → MNT: өртөг (буфертэй ханш) + тогтмол ашиг, 1000-д бөөрөнхийлнө
 function toMnt(usd) {
-  const v = usd * FX * (1 + MARKUP);
-  return Math.ceil(v / 1000) * 1000;
+  return Math.ceil((usd * FX + FLAT) / 1000) * 1000;
 }
 
 // "Миний Дэлгүүр" / "miniharsh.com" → "miniharsh" (суурь нэр)
