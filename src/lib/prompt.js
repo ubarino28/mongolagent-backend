@@ -434,6 +434,7 @@ ${lbl.appointment.toUpperCase()}
       hasTable = tc > 0;
     } catch {}
   }
+  console.log("[PROMPT] restaurant check:", { hasTable, businessType, orgId });
   if (hasTable || businessType === "restaurant") {
     restaurantBlock = `━━━━━━━━━━━━━━━━━━━━━━━━━
 РЕСТОРАН: МЕНЮ + ШИРЭЭ ЗАХИАЛГА
