@@ -404,6 +404,39 @@ router.post("/products", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /store/products/bulk — олон бараа нэг дор оруулах (CSV/Excel import)
+router.post("/products/bulk", async (req, res) => {
+  try {
+    const items = Array.isArray(req.body?.products) ? req.body.products : [];
+    if (!items.length) return res.status(400).json({ error: "products массив хоосон байна" });
+    if (items.length > 1000) return res.status(400).json({ error: "Нэг удаад дээд тал нь 1000 бараа" });
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    const data = items
+      .filter((p) => p && String(p.name || "").trim())
+      .map((p, i) => ({
+        storeId: store.id,
+        orgId: req.org.orgId,
+        name: String(p.name).trim(),
+        description: p.description ? String(p.description) : null,
+        price: Number(p.price) || 0,
+        compareAtPrice: p.compareAtPrice != null && p.compareAtPrice !== "" ? Number(p.compareAtPrice) : null,
+        images: Array.isArray(p.images) ? p.images : (p.images ? String(p.images).split(/[, ]+/).filter(Boolean) : []),
+        stock: Number(p.stock) || 0,
+        sku: p.sku ? String(p.sku) : null,
+        category: p.category ? String(p.category) : null,
+        active: p.active !== undefined ? !!p.active : true,
+        sortOrder: i,
+      }));
+    if (!data.length) return res.status(400).json({ error: "Хүчинтэй бараа алга (нэр шаардлагатай)" });
+
+    const result = await prisma.product.createMany({ data });
+    res.json({ created: result.count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // PUT /store/products/:id
 router.put("/products/:id", async (req, res) => {
   try {
