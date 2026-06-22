@@ -2,6 +2,7 @@
 const express = require("express");
 const { getPrisma } = require("../lib/db");
 const qpay = require("../services/qpay.service");
+const { decrementStockForOrder } = require("../services/stock.service");
 
 const router = express.Router();
 
@@ -34,6 +35,7 @@ function publicProduct(p) {
     price: p.price,
     compareAtPrice: p.compareAtPrice,
     images: p.images,
+    variants: Array.isArray(p.variants) ? p.variants : [],
     stock: p.stock,
     category: p.category,
     sku: p.sku,
@@ -155,7 +157,7 @@ router.post("/:slug/checkout", async (req, res) => {
       if (p.stock > 0 && qty > p.stock) return res.status(400).json({ error: `"${p.name}" — нөөц хүрэлцэхгүй (үлдсэн: ${p.stock})` });
       const lineTotal = p.price * qty;
       total += lineTotal;
-      lineItems.push({ productId: p.id, name: p.name, price: p.price, qty, lineTotal, image: Array.isArray(p.images) ? p.images[0] || null : null });
+      lineItems.push({ productId: p.id, name: p.name, price: p.price, qty, lineTotal, image: Array.isArray(p.images) ? p.images[0] || null : null, variant: it.variant ? String(it.variant).slice(0, 120) : null });
     }
 
     // Купон хямдрал (байвал) — сервер талд дахин шалгаж тооцоолно
@@ -279,6 +281,7 @@ router.get("/order/:id/status", async (req, res) => {
     const paid = result.invoice_status === "PAID";
     if (paid) {
       await prisma.storeOrder.update({ where: { id: order.id }, data: { qpayStatus: "PAID", status: "PAID" } });
+      await decrementStockForOrder(prisma, order).catch(() => {});
       return res.json({ status: "PAID", orderStatus: "PAID" });
     }
     res.json({ status: "PENDING", orderStatus: order.status });
