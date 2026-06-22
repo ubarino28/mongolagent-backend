@@ -362,13 +362,24 @@ async function buildSystemPrompt(isNew, orgId = null) {
 
   // Appointment block — зөвхөн org-д active staff байвал нэмнэ
   let appointmentBlock = "";
+  let staffBlock = "";
   if (orgId) {
     try {
       const prismaInst = getPrisma();
-      const staffCount = await prismaInst.turuuStaff.count({ where: { orgId, isActive: true } });
-      if (staffCount > 0) {
+      const staffList = await prismaInst.turuuStaff.findMany({ where: { orgId, isActive: true }, select: { id: true, name: true, services: true, workDays: true, workStart: true, workEnd: true } });
+      if (staffList.length > 0) {
         const { getLabels } = require("./businessType");
         const lbl = getLabels(businessType);
+        const staffLines = staffList.map((s) => {
+          const svcs = Array.isArray(s.services) ? s.services : [];
+          const svcStr = svcs.map((sv) => `${sv.name} (${sv.durationMinutes || 60}мин${sv.depositAmount ? `, ₮${sv.depositAmount}` : ""})`).join(", ");
+          return `• ${s.name} — ${svcStr || "үйлчилгээ бүртгэлгүй"} | ${s.workStart}–${s.workEnd}`;
+        }).join("\n");
+        staffBlock = `━━━━━━━━━━━━━━━━━━━━━━━━━
+БҮРТГЭЛТЭЙ ${lbl.staffPluralUI.toUpperCase()} (${staffList.length})
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${staffLines}
+✗ Энэ жагсаалтад БАЙХГҮЙ ${lbl.staff} байна гэж хэзээ ч хэлэхгүй — зөвхөн дээрх жагсаалтаар хариулна`;
         appointmentBlock = `━━━━━━━━━━━━━━━━━━━━━━━━━
 ${lbl.appointment.toUpperCase()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -413,6 +424,7 @@ ${lbl.appointment.toUpperCase()}
   }
 
   const parts = [body, imageBlock, variantImageBlock, visualMatchBlock];
+  if (staffBlock) parts.push(staffBlock);
   if (appointmentBlock) parts.push(appointmentBlock);
   if (restaurantBlock) parts.push(restaurantBlock);
   parts.push(newConvLine);
