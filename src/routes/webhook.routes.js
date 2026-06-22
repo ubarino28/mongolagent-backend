@@ -149,6 +149,116 @@ router.post("/qpay/:orderId", async (req, res) => {
   });
 });
 
+// Store (website builder) QPay callback — POST /webhook/qpay-store/:orderId
+router.post("/qpay-store/:orderId", async (req, res) => {
+  res.json({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      const prisma = getPrisma();
+      const order = await prisma.storeOrder.findUnique({ where: { id: req.params.orderId } });
+      if (!order?.qpayInvoiceId || order.qpayStatus === "PAID") return;
+
+      const result = await checkPayment(order.qpayInvoiceId);
+      if (result.invoice_status !== "PAID") return;
+
+      await prisma.storeOrder.update({
+        where: { id: order.id },
+        data: { qpayStatus: "PAID", status: "PAID" },
+      });
+
+      // Барааны нөөцийг хасах
+      try {
+        const { decrementStockForOrder } = require("../services/stock.service");
+        await decrementStockForOrder(prisma, order);
+      } catch { /* non-blocking */ }
+
+      // Telegram мэдэгдэл
+      try {
+        const org = await prisma.organization.findUnique({
+          where: { id: order.orgId },
+          select: { telegramBotToken: true, telegramChatId: true },
+        });
+        const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+        const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+        if (botToken && chatId) {
+          const axios = require("axios");
+          const text = `🛒 Дэлгүүрийн захиалга төлөгдлөө!\nЗахиалга #${order.id.slice(-6).toUpperCase()}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}\nУтас: ${order.customerPhone || "—"}`;
+          await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
+        }
+      } catch { /* non-blocking */ }
+
+      console.log(`[QPay-store] Order ${order.id} PAID`);
+    } catch (err) {
+      console.error("[QPay-store callback]", err.message);
+    }
+  });
+});
+
+// Appointment QPay callback — POST /webhook/qpay-appointment/:appointmentId
+router.post("/qpay-appointment/:appointmentId", async (req, res) => {
+  res.json({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      const prisma = getPrisma();
+      const appt = await prisma.turuuAppointment.findUnique({
+        where: { id: req.params.appointmentId },
+        include: { staff: { select: { name: true } } },
+      });
+      if (!appt?.qpayInvoiceId || appt.depositStatus === "PAID") return;
+
+      const result = await checkPayment(appt.qpayInvoiceId);
+      const paid = result.invoice_status === "PAID";
+      if (!paid) return;
+
+      await prisma.turuuAppointment.update({
+        where: { id: appt.id },
+        data: { qpayStatus: "PAID", depositStatus: "PAID", status: "CONFIRMED" },
+      });
+
+      // Telegram мэдэгдэл
+      if (appt.orgId) {
+        try {
+          const org = await prisma.organization.findUnique({
+            where: { id: appt.orgId },
+            select: { telegramBotToken: true, telegramChatId: true },
+          });
+          const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+          const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+          if (botToken && chatId) {
+            const axios = require("axios");
+            const text = `✅ Урьдчилгаа төлөгдлөө!\n${appt.staff?.name || "—"} · ${appt.serviceName}\n📅 ${appt.date} ${appt.timeSlot}\n💰 ₮${Number(appt.depositAmount || 0).toLocaleString()}\n👤 ${appt.customerName || "—"}`;
+            await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
+          }
+        } catch { /* non-blocking */ }
+      }
+
+      // Facebook Messenger баталгаажуулалт
+      if (appt.psid && appt.orgId) {
+        try {
+          const org = await prisma.organization.findUnique({
+            where: { id: appt.orgId },
+            select: { fbPageToken: true },
+          });
+          const token = org?.fbPageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+          if (token) {
+            await sendText(
+              appt.psid,
+              `✅ Урьдчилгаа ₮${Number(appt.depositAmount || 0).toLocaleString()} амжилттай төлөгдлөө!\n\n📅 ${appt.date} ${appt.timeSlot}\n💆 ${appt.staff?.name || "—"}\n✂️ ${appt.serviceName}\n\nЦаг захиалга баталгаажлаа! Тантай тухайн цагт уулзана 🙏`,
+              token
+            ).catch(() => {});
+          }
+        } catch { /* non-blocking */ }
+      }
+
+      console.log(`[QPay] Appointment ${appt.id} deposit PAID`);
+    } catch (err) {
+      console.error("[QPay appointment callback]", err.message);
+    }
+  });
+});
+
 // Subscription QPay callback — POST /webhook/sub-qpay/:orgId
 router.post("/sub-qpay/:orgId", async (req, res) => {
   res.json({ ok: true });

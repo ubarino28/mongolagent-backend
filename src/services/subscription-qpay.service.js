@@ -50,6 +50,40 @@ async function createInvoice({ orgId, plan, amount, description }) {
   };
 }
 
+// Домэйн худалдан авалтын invoice — ТУСДАА данс руу (subscription-д хүрэхгүй)
+async function createDomainInvoice({ orgId, amount, description }) {
+  const merchantId = process.env.DOMAIN_QPAY_MERCHANT_ID || process.env.PLATFORM_QPAY_MERCHANT_ID;
+  const bankCode   = process.env.DOMAIN_BANK_CODE   || process.env.PLATFORM_BANK_CODE || "050000";
+  const accountNo  = process.env.DOMAIN_ACCOUNT_NUMBER || process.env.PLATFORM_ACCOUNT_NUMBER;
+  const accountName= process.env.DOMAIN_ACCOUNT_NAME || process.env.PLATFORM_ACCOUNT_NAME || "Mongol Agent";
+  const apiUrl     = process.env.API_URL || "https://api.mongolagent.mn";
+
+  if (!merchantId) throw new Error("QPay merchant тохируулаагүй");
+  if (!accountNo)  throw new Error("Домэйн дансны дугаар тохируулаагүй");
+
+  const token = await getToken();
+  const res = await axios.post(`${BASE_URL}/v2/invoice`, {
+    merchant_id:   merchantId,
+    branch_code:   "BRANCH_001",
+    amount:        Math.round(amount),
+    currency:      "MNT",
+    customer_name: "Mongol Agent — Domain",
+    customer_logo: "",
+    callback_url:  `${apiUrl}/webhook/domain-qpay/${orgId}`,
+    description:   description || "Домэйн худалдан авалт",
+    mcc_code:      "",
+    bank_accounts: [{
+      account_bank_code: bankCode,
+      account_number:    accountNo,
+      account_name:      accountName,
+      is_default:        true,
+    }],
+  }, { headers: _headers(token) });
+
+  const d = res.data;
+  return { invoice_id: d.id, qr_text: d.qr_code, qr_image: d.qr_image, urls: d.urls || [] };
+}
+
 // Төлбөр шалгах
 async function checkPayment(invoiceId) {
   const token = await getToken();
@@ -61,4 +95,4 @@ async function checkPayment(invoiceId) {
   return res.data;
 }
 
-module.exports = { createInvoice, checkPayment };
+module.exports = { createInvoice, createDomainInvoice, checkPayment };

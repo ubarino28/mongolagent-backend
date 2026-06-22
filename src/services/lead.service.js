@@ -86,9 +86,45 @@ async function saveAppointment({ psid, orgId = null, staffId, staffName, service
     if (recent) return { ...recent, duplicate: true };
   }
 
+  // Давхар захиалга шалгах: тухайн мастерын тухайн цагт өөр захиалга байвал хориглоно
+  const conflict = await prisma.turuuAppointment.findFirst({
+    where: { staffId, date, timeSlot, status: { not: "CANCELLED" } },
+  });
+  if (conflict) {
+    throw new Error(`Уучлаарай, ${timeSlot} цаг аль хэдийн захиалагдсан байна. Өөр цаг сонгоно уу.`);
+  }
+
   const appt = await prisma.turuuAppointment.create({
     data: { psid, orgId, staffId, serviceName, durationMinutes, date, timeSlot, customerName, customerPhone, depositAmount, notes },
   });
+
+  // QPay урьдчилгаа invoice автоматаар үүсгэх
+  let qpayData = null;
+  if (depositAmount > 0 && orgId) {
+    try {
+      const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { qpayMerchantId: true, qpayBranchCode: true, qpayAccountNumber: true, qpayAccountBank: true, qpayAccountName: true } });
+      if (org?.qpayMerchantId && org?.qpayAccountNumber) {
+        const qpay = require("../services/qpay.service");
+        const API_URL = process.env.API_URL || "https://api.mongolagent.mn";
+        const result = await qpay.createInvoice({
+          merchantId: org.qpayMerchantId,
+          branchCode: org.qpayBranchCode || "BRANCH_001",
+          amount: depositAmount,
+          description: `Урьдчилгаа — ${serviceName} (${date} ${timeSlot})`,
+          customerName: customerName || "Хэрэглэгч",
+          bankAccounts: [{ account_bank_code: org.qpayAccountBank, account_number: org.qpayAccountNumber, account_name: org.qpayAccountName, is_default: true }],
+          callbackUrl: `${API_URL}/webhook/qpay-appointment/${appt.id}`,
+        });
+        await prisma.turuuAppointment.update({
+          where: { id: appt.id },
+          data: { qpayInvoiceId: result.invoice_id, qpayQrText: result.qr_text, qpayUrls: result.urls || [], qpayStatus: "PENDING", depositStatus: "PENDING" },
+        });
+        qpayData = { invoiceId: result.invoice_id, qrText: result.qr_text, urls: result.urls || [] };
+      }
+    } catch (e) {
+      console.error("[QPay appointment invoice]", e.message);
+    }
+  }
 
   const { botToken, chatId } = await getTelegramConfig(orgId);
   let staffKeyLabel = "Мастер";
@@ -107,7 +143,7 @@ async function saveAppointment({ psid, orgId = null, staffId, staffName, service
     Тэмдэглэл:   notes,
   }, botToken, chatId);
 
-  return appt;
+  return { ...appt, qpayData };
 }
 
 module.exports = { saveLead, saveConsultation, saveOrder, saveAppointment };
