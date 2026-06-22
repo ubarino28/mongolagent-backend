@@ -207,6 +207,9 @@ model Store {
   templateId   String?                    // сонгосон template
   theme        Json     @default("{}")    // өнгө, фонт, лого г.м
   currency     String   @default("MNT")
+  phone        String?                     // footer холбоо барих
+  email        String?
+  address      String?
   publishedAt  DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
