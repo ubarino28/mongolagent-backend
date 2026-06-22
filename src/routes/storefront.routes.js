@@ -84,6 +84,7 @@ router.get("/site", async (req, res) => {
         phone: store.phone,
         email: store.email,
         address: store.address,
+        delivery: store.delivery || {},
       },
       pages,
       products: products.map(publicProduct),
