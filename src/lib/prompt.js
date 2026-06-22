@@ -427,15 +427,8 @@ ${lbl.appointment.toUpperCase()}
   }
 
   let restaurantBlock = "";
-  let hasTable = false;
-  if (orgId) {
-    try {
-      const tc = await getPrisma().turuuTable.count({ where: { orgId, isActive: true } });
-      hasTable = tc > 0;
-    } catch {}
-  }
-  console.log("[PROMPT] restaurant check:", { hasTable, businessType, orgId });
-  if (hasTable || businessType === "restaurant") {
+  // Restaurant block-г бүх org-д нэмнэ — ширээ байхгүй бол check_tables хоосон буцаана
+  {
     restaurantBlock = `━━━━━━━━━━━━━━━━━━━━━━━━━
 РЕСТОРАН: МЕНЮ + ШИРЭЭ ЗАХИАЛГА
 ━━━━━━━━━━━━━━━━━━━━━━━━━
