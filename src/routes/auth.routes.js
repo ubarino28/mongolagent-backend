@@ -34,11 +34,8 @@ router.post("/register", async (req, res) => {
     const slug = email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "") + "-" + Date.now().toString(36);
     const passwordHash = await bcrypt.hash(password, 10);
 
-    const trialEnds = new Date();
-    trialEnds.setDate(trialEnds.getDate() + 30);
-
     const org = await prisma.organization.create({
-      data: { name, slug, email, passwordHash, subscriptionEndsAt: trialEnds },
+      data: { name, slug, email, passwordHash },
     });
 
     const token = signToken(org);

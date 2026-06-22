@@ -35,7 +35,6 @@ model Organization {
   updatedAt           DateTime @updatedAt
 
   orders TuruuOrder[]
-  store  Store?
 }
 
 model PasswordResetToken {
@@ -161,7 +160,6 @@ model TuruuStaff {
   workDays     Json                @default("[1,2,3,4,5]")
   workStart    String              @default("09:00")
   workEnd      String              @default("18:00")
-  bufferMinutes Int                @default(0)
   isActive     Boolean             @default(true)
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
@@ -190,132 +188,4 @@ model TuruuAppointment {
   notes           String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
-}
-
-// ─────────────────────────────────────────────
-// Website builder (Mongol Agent Website)
-// ─────────────────────────────────────────────
-
-model Store {
-  id           String   @id @default(uuid())
-  orgId        String   @unique
-  org          Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  name         String
-  slug         String   @unique          // subdomain: slug.mongolagent.mn
-  customDomain String?  @unique          // хэрэглэгчийн өөрийн домэйн (Phase 4)
-  status       String   @default("draft") // draft | published
-  templateId   String?                    // сонгосон template
-  theme        Json     @default("{}")    // өнгө, фонт, лого г.м
-  currency     String   @default("MNT")
-  phone        String?                     // footer холбоо барих
-  email        String?
-  address      String?
-  delivery     Json     @default("{}")    // хүргэлтийн тохиргоо (төрөл, төлбөр, үнэгүй босго)
-  publishedAt  DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  pages     StorePage[]
-  products  Product[]
-  orders    StoreOrder[]
-  discounts Discount[]
-}
-
-model StorePage {
-  id        String   @id @default(uuid())
-  storeId   String
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  title     String
-  path      String                       // "/", "/about", "/contact"
-  type      String   @default("custom")  // home | about | contact | custom
-  content   Json     @default("{}")      // Puck drag-and-drop блокууд
-  published Boolean  @default(false)
-  sortOrder Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([storeId, path])
-}
-
-model Product {
-  id             String   @id @default(uuid())
-  storeId        String
-  store          Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  orgId          String
-  name           String
-  description    String?
-  price          Float    @default(0)
-  compareAtPrice Float?
-  images         Json     @default("[]")
-  variants       Json     @default("[]") // [{ name: "Хэмжээ", values: ["S","M","L"] }]
-  stock          Int      @default(0)
-  sku            String?
-  category       String?
-  active         Boolean  @default(true)
-  sortOrder      Int      @default(0)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-}
-
-model DomainOrder {
-  id            String   @id @default(uuid())
-  storeId       String
-  orgId         String
-  domain        String                          // худалдаж авах домэйн (миний.com)
-  priceMnt      Float    @default(0)            // хэрэглэгчээс авах MNT үнэ
-  priceUsd      Float    @default(0)            // Vercel-ийн USD үнэ
-  status        String   @default("pending")    // pending | paid | registered | failed
-  qpayInvoiceId String?
-  qpayQrText    String?
-  qpayUrls      Json?
-  qpayStatus    String?  @default("PENDING")
-  vercelOrderId String?
-  errorMsg      String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
-
-model Discount {
-  id        String   @id @default(uuid())
-  storeId   String
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  orgId     String
-  code      String                          // купон код (ихэвчлэн ТОМ үсгээр)
-  type      String   @default("percent")    // percent | fixed
-  value     Float    @default(0)            // 10 (=10%) эсвэл 5000 (=5000₮)
-  minAmount Float    @default(0)            // доод захиалгын дүн
-  maxUses   Int?                             // нийт ашиглах хязгаар (null = хязгааргүй)
-  usedCount Int      @default(0)
-  active    Boolean  @default(true)
-  startsAt  DateTime?
-  endsAt    DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([storeId, code])
-}
-
-model StoreOrder {
-  id              String   @id @default(uuid())
-  storeId         String
-  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  orgId           String
-  customerName    String?
-  customerPhone   String?
-  customerEmail   String?
-  deliveryAddress String?
-  items           Json     @default("[]") // сагсны бараанууд
-  totalAmount     Float    @default(0)
-  discountCode    String?                   // хэрэглэсэн купон код
-  discountAmount  Float    @default(0)      // хямдруулсан дүн
-  deliveryMethod  String?                   // inUB | countryside | pickup
-  deliveryFee     Float    @default(0)      // хүргэлтийн төлбөр
-  status          String   @default("NEW") // NEW | PAID | SHIPPED | DONE | CANCELLED
-  notes           String?
-  qpayInvoiceId   String?
-  qpayQrText      String?
-  qpayUrls        Json?
-  qpayStatus      String?  @default("PENDING")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
 }

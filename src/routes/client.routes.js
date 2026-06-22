@@ -557,11 +557,6 @@ router.post("/settings/builder", async (req, res) => {
 — Үгүй гэвэл одоогийн тохиргоо хэвээр хадгалагдана"
 
 → Хэрэглэгч "Тийм", "за", "тийм ээ", "устга", "эхэл" гэх мэт ИЛТ ЗӨВШӨӨРСӨН хариулт өгсний ДАРАА Л clear_knowledge функцийг дуудна.
-→ clear_knowledge амжилттай дуудсаны ДАРАА ЗААВАЛ шууд ТАНИХ АСУУЛТЫГ асуу:
-  "Мэдлэгийн санг цэвэрлэлээ! Эхнээс эхэлцгээе 😊
-
-  Компанийнхаа нэр болон ямар чиглэлийн бизнес эрхэлдгээ товч хэлнэ үү?
-  Жишээ: 'Бид ABC Shop — онлайн дэлгүүр' / 'Бид Belle Studio — гоо сайхны салон'"
 → "Үгүй", "болих", "хэрэггүй", "болио" гэвэл clear_knowledge ХЭЗЭЭ Ч ДУУДАХГҮЙ — "Ойлголоо, тохиргоо хэвээрээ үлдлээ 👍" гэж хариулаад өөрчлөлт хийхгүй.`;
 
     const STOCK_BLOCK = `━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1131,12 +1126,7 @@ ${RESTART_BLOCK}`;
         }
 
         if (toolCall.function.name === "clear_knowledge") {
-          await Promise.all([
-            prisma.turuuKnowledge.deleteMany({ where: { orgId } }),
-            prisma.turuuAppointment.deleteMany({ where: { orgId } }),
-            prisma.turuuStaff.deleteMany({ where: { orgId } }),
-            prisma.turuuSettings.deleteMany({ where: { orgId, key: { in: ["business_type", "ai_name", "ai_tone"] } } }),
-          ]);
+          await prisma.turuuKnowledge.deleteMany({ where: { orgId } });
           cleared = true;
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ ok: true }) });
         }
@@ -2255,7 +2245,7 @@ router.get("/staff", async (req, res) => {
 // POST /client/staff
 router.post("/staff", async (req, res) => {
   try {
-    const { name, services, workDays, workStart, workEnd, bufferMinutes } = req.body;
+    const { name, services, workDays, workStart, workEnd } = req.body;
     if (!name) return res.status(400).json({ error: "name шаардлагатай" });
     const prisma = getPrisma();
     const staff = await prisma.turuuStaff.create({
@@ -2266,7 +2256,6 @@ router.post("/staff", async (req, res) => {
         workDays: workDays ?? [1, 2, 3, 4, 5],
         workStart: workStart ?? "09:00",
         workEnd:   workEnd   ?? "18:00",
-        bufferMinutes: bufferMinutes ?? 0,
       },
     });
     res.json(staff);
@@ -2279,17 +2268,16 @@ router.put("/staff/:id", async (req, res) => {
     const prisma = getPrisma();
     const existing = await prisma.turuuStaff.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
     if (!existing) return res.status(404).json({ error: "Олдсонгүй" });
-    const { name, services, workDays, workStart, workEnd, bufferMinutes, isActive } = req.body;
+    const { name, services, workDays, workStart, workEnd, isActive } = req.body;
     const staff = await prisma.turuuStaff.update({
       where: { id: req.params.id },
       data: {
-        ...(name          !== undefined && { name }),
-        ...(services      !== undefined && { services }),
-        ...(workDays      !== undefined && { workDays }),
-        ...(workStart     !== undefined && { workStart }),
-        ...(workEnd       !== undefined && { workEnd }),
-        ...(bufferMinutes !== undefined && { bufferMinutes }),
-        ...(isActive      !== undefined && { isActive }),
+        ...(name       !== undefined && { name }),
+        ...(services   !== undefined && { services }),
+        ...(workDays   !== undefined && { workDays }),
+        ...(workStart  !== undefined && { workStart }),
+        ...(workEnd    !== undefined && { workEnd }),
+        ...(isActive   !== undefined && { isActive }),
       },
     });
     res.json(staff);
@@ -2353,8 +2341,7 @@ router.get("/availability", async (req, res) => {
       ? Math.max(...services.map((s) => Number(s.durationMinutes) || 60))
       : 60;
 
-    const buffer = Number(staff.bufferMinutes) || 0;
-    const allSlots = buildSlots(staff.workStart, staff.workEnd, duration + buffer);
+    const allSlots = buildSlots(staff.workStart, staff.workEnd, duration);
     const available = allSlots.filter((s) => !bookedSlots.includes(s));
 
     res.json({ date, staffId, staffName: staff.name, available, offDay: false });
@@ -2374,7 +2361,7 @@ router.get("/appointments", async (req, res) => {
       orgId: req.org.orgId,
       status: { not: "BLOCKED" },
       ...(date   && { date }),
-      ...(status && { status: String(status) }),
+      ...(status && { status: status as string }),
     };
     const [data, total] = await Promise.all([
       prisma.turuuAppointment.findMany({
@@ -2429,9 +2416,8 @@ async function handleSchedule(req, res) {
     const services = Array.isArray(staff.services) ? staff.services : JSON.parse(staff.services || "[]");
     const rawDurations = services.map((s) => s.durationMinutes);
     const duration = services.length > 0 ? Math.max(...services.map((s) => Number(s.durationMinutes) || 60)) : 60;
-    const buffer = Number(staff.bufferMinutes) || 0;
-    const allSlots = buildSlots(staff.workStart, staff.workEnd, duration + buffer);
-    console.log("[SCHEDULE]", { staffId, date, dayOfWeek, workDays, workStart: staff.workStart, workEnd: staff.workEnd, rawDurations, duration, buffer, slotsCount: allSlots.length });
+    const allSlots = buildSlots(staff.workStart, staff.workEnd, duration);
+    console.log("[SCHEDULE]", { staffId, date, dayOfWeek, workDays, workStart: staff.workStart, workEnd: staff.workEnd, rawDurations, duration, slotsCount: allSlots.length });
 
     const slots = allSlots.map((time) => {
       const appt = apptMap.get(time);
