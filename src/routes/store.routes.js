@@ -278,8 +278,14 @@ router.post("/pages", async (req, res) => {
     if (dup) return res.status(409).json({ error: "Энэ замтай хуудас аль хэдийн байна" });
 
     const count = await prisma.storePage.count({ where: { storeId: store.id } });
+    // Хоосон бол эхлэлийн агуулга өгнө (хэрэглэгч засагчаар дэлгэрэнгүй өөрчилнө)
+    const starter = {
+      root: { props: { title } },
+      content: [{ type: "About", props: { id: "a1", heading: title, text: "Энд агуулгаа бичнэ үү. Хуудсыг засагчаар дэлгэрэнгүй өөрчилж болно." } }],
+    };
+    const pageContent = content && Object.keys(content).length ? content : starter;
     const page = await prisma.storePage.create({
-      data: { storeId: store.id, title, path: normPath, type: type || "custom", content: content || {}, published: true, sortOrder: count },
+      data: { storeId: store.id, title, path: normPath, type: type || "custom", content: pageContent, published: true, sortOrder: count },
     });
     res.json({ page });
   } catch (e) { res.status(500).json({ error: e.message }); }
