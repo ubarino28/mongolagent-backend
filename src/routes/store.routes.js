@@ -6,6 +6,8 @@ const { getPrisma } = require("../lib/db");
 const { clientAuthMiddleware } = require("../middleware/clientAuth");
 const { listTemplates, getTemplate } = require("../lib/storeTemplates");
 const vercel = require("../services/vercel.service");
+const vdomains = require("../services/vercelDomains.service");
+const platformQpay = require("../services/subscription-qpay.service");
 
 const router = express.Router();
 
@@ -583,6 +585,76 @@ router.delete("/discounts/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Купон олдсонгүй" });
     await prisma.discount.delete({ where: { id: existing.id } });
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Домэйн зарах (Vercel registrar дээр) ────────────────────────────────────
+
+// GET /store/domain/search?q=нэр
+router.get("/domain/search", async (req, res) => {
+  try {
+    if (!vdomains.enabled()) return res.status(503).json({ error: "Домэйн үйлчилгээ идэвхгүй байна" });
+    const results = await vdomains.search(req.query.q || "");
+    res.json({ results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /store/domain/purchase { domain } — QPay invoice үүсгэнэ
+router.post("/domain/purchase", async (req, res) => {
+  try {
+    const { domain } = req.body;
+    if (!domain || !/^[a-z0-9-]+\.[a-z]{2,}$/i.test(domain)) return res.status(400).json({ error: "Домэйн буруу байна" });
+    if (!vdomains.enabled()) return res.status(503).json({ error: "Домэйн үйлчилгээ идэвхгүй байна" });
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    // Боломж + үнийг сервер талд дахин шалгана
+    const avail = await vdomains.availability(domain);
+    if (!avail) return res.status(409).json({ error: "Энэ домэйн боломжгүй болсон байна" });
+    const pd = await vdomains.priceData(domain);
+    const priceMnt = vdomains.toMnt(pd.purchasePrice);
+
+    const order = await prisma.domainOrder.create({ data: { storeId: store.id, orgId: req.org.orgId, domain, priceMnt, priceUsd: pd.purchasePrice, status: "pending", qpayStatus: "PENDING" } });
+    const inv = await platformQpay.createInvoice({ orgId: req.org.orgId, plan: "domain", amount: priceMnt, description: `Домэйн худалдан авалт: ${domain}` });
+    await prisma.domainOrder.update({ where: { id: order.id }, data: { qpayInvoiceId: inv.invoice_id, qpayQrText: inv.qr_text, qpayUrls: inv.urls || [] } });
+
+    res.json({ orderId: order.id, domain, priceMnt, payment: { qrText: inv.qr_text, qrImage: inv.qr_image, urls: inv.urls || [] } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /store/domain/purchase/:id/status — төлбөр баталгаажвал худалдаж аваад дэлгүүрт холбоно
+router.get("/domain/purchase/:id/status", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const order = await prisma.domainOrder.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!order) return res.status(404).json({ error: "Захиалга олдсонгүй" });
+
+    if (order.status === "registered") return res.json({ status: "registered", domain: order.domain });
+    if (order.status === "failed") return res.json({ status: "failed", error: order.errorMsg || "Алдаа гарлаа" });
+    if (!order.qpayInvoiceId) return res.json({ status: order.status });
+
+    const pay = await platformQpay.checkPayment(order.qpayInvoiceId);
+    if (pay.invoice_status !== "PAID") return res.json({ status: "pending" });
+
+    // Төлсөн — нэг л удаа худалдаж авна
+    if (order.status === "pending") {
+      await prisma.domainOrder.update({ where: { id: order.id }, data: { qpayStatus: "PAID", status: "paid" } });
+      try {
+        const bought = await vdomains.buy(order.domain, { expectedPrice: order.priceUsd, years: 1, renew: true });
+        await vercel.addCustomDomain(order.domain).catch(() => {});
+        await prisma.store.update({ where: { id: store.id }, data: { customDomain: order.domain } });
+        await prisma.domainOrder.update({ where: { id: order.id }, data: { status: "registered", vercelOrderId: bought.orderId || bought.id || null } });
+        return res.json({ status: "registered", domain: order.domain });
+      } catch (e) {
+        const msg = e.response?.data?.error?.message || e.message;
+        await prisma.domainOrder.update({ where: { id: order.id }, data: { status: "failed", errorMsg: msg } });
+        return res.json({ status: "failed", error: "Домэйн бүртгэхэд алдаа гарлаа. Бидэнтэй холбогдоно уу." });
+      }
+    }
+    res.json({ status: order.status });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

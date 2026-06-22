@@ -75,6 +75,22 @@ async function removeStoreDomain(slug) {
   }
 }
 
+// Дурын домэйнийг (custom) store project-д нэмэх — платформоос худалдаж авсан домэйнд
+async function addCustomDomain(name) {
+  if (!enabled()) return { skipped: true };
+  try {
+    const url = `https://api.vercel.com/v10/projects/${PROJECT}/domains${teamQuery()}`;
+    await axios.post(url, { name }, { headers: authHeaders() });
+    return { ok: true, domain: name };
+  } catch (e) {
+    const data = e.response?.data?.error;
+    if (data?.code === "domain_already_in_use" || data?.code === "domain_already_exists" || e.response?.status === 409) {
+      return { ok: true, already: true, domain: name };
+    }
+    return { ok: false, error: data?.message || e.message, domain: name };
+  }
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // {slug}.mongolagent.mn дээр HTTPS (SSL) ажиллаж байгаа эсэхийг шалгана.
@@ -115,4 +131,4 @@ async function ensureStoreDomain(slug, { maxWaitMs = 18000, nudgeAfterMs = 7000,
   return { ok: true, domain: domainFor(slug), ssl };
 }
 
-module.exports = { addStoreDomain, removeStoreDomain, reprovisionStoreDomain, ensureStoreDomain, checkSSL, enabled, domainFor };
+module.exports = { addStoreDomain, removeStoreDomain, reprovisionStoreDomain, ensureStoreDomain, checkSSL, addCustomDomain, enabled, domainFor };
