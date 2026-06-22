@@ -247,6 +247,7 @@ model Product {
   price          Float    @default(0)
   compareAtPrice Float?
   images         Json     @default("[]")
+  variants       Json     @default("[]") // [{ name: "Хэмжээ", values: ["S","M","L"] }]
   stock          Int      @default(0)
   sku            String?
   category       String?
