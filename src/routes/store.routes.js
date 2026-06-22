@@ -616,7 +616,7 @@ router.post("/domain/purchase", async (req, res) => {
     const priceMnt = vdomains.toMnt(pd.purchasePrice);
 
     const order = await prisma.domainOrder.create({ data: { storeId: store.id, orgId: req.org.orgId, domain, priceMnt, priceUsd: pd.purchasePrice, status: "pending", qpayStatus: "PENDING" } });
-    const inv = await platformQpay.createInvoice({ orgId: req.org.orgId, plan: "domain", amount: priceMnt, description: `Домэйн худалдан авалт: ${domain}` });
+    const inv = await platformQpay.createDomainInvoice({ orgId: req.org.orgId, amount: priceMnt, description: `Домэйн худалдан авалт: ${domain}` });
     await prisma.domainOrder.update({ where: { id: order.id }, data: { qpayInvoiceId: inv.invoice_id, qpayQrText: inv.qr_text, qpayUrls: inv.urls || [] } });
 
     res.json({ orderId: order.id, domain, priceMnt, payment: { qrText: inv.qr_text, qrImage: inv.qr_image, urls: inv.urls || [] } });
