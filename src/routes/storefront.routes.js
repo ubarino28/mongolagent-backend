@@ -227,6 +227,27 @@ router.post("/:slug/checkout", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /storefront/order/:id — захиалгын төлөв + товч мэдээлэл (хянах хуудсанд)
+router.get("/order/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const o = await prisma.storeOrder.findUnique({ where: { id: req.params.id } });
+    if (!o) return res.status(404).json({ error: "Захиалга олдсонгүй" });
+    res.json({
+      order: {
+        id: o.id,
+        status: o.status,
+        qpayStatus: o.qpayStatus,
+        totalAmount: o.totalAmount,
+        discountAmount: o.discountAmount,
+        items: o.items,
+        customerName: o.customerName,
+        createdAt: o.createdAt,
+      },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /storefront/order/:id/status — төлбөрийн төлөв шалгах (polling)
 router.get("/order/:id/status", async (req, res) => {
   try {
