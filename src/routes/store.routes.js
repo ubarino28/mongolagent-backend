@@ -188,6 +188,23 @@ router.put("/", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// DELETE /store — дэлгүүрийг бүхэлд нь устгах (хуудас, бараа, захиалга, купон cascade)
+router.delete("/", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    // Vercel subdomain-г хасах (амжилтгүй ч устгалыг үргэлжлүүлнэ)
+    await vercel.removeStoreDomain(store.slug).catch(() => {});
+
+    // Cascade delete — холбоотой pages/products/orders/discounts бүгд устана
+    await prisma.store.delete({ where: { id: store.id } });
+
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /store/apply-template — сонгосон загварыг одоо байгаа дэлгүүрт хэрэглэх
 router.post("/apply-template", async (req, res) => {
   try {
