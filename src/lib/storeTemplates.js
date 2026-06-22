@@ -17,6 +17,21 @@ function homePage(content) {
   return [{ title: "Нүүр", path: "/", type: "home", content }];
 }
 
+// Бүх template-д default-аар орох "Захиалгын мэдээлэл" хэсэг
+const INFO_CARDS = {
+  type: "InfoCards",
+  props: {
+    id: "info",
+    heading: "Захиалгын мэдээлэл",
+    subheading: "Та манайхаар үйлчлүүлэхээсээ өмнө доорх мэдээлэлтэй танилцана уу?",
+    items: [
+      { title: "Хүргэлтийн нөхцөл", text: "Хүргэлтийн төлбөр 7,000₮. 50,000₮-с дээш худалдан авалтад хүргэлт үнэгүй. Захиалга баталгаажсанаас хойш 24-48 цагт хүргэнэ." },
+      { title: "Төлбөрийн мэдээлэл", text: "Та бүтээгдэхүүний төлбөр + хүргэлтийн төлбөрөө 100% төлснөөр захиалга баталгаажна. QPay болон банкны шилжүүлгийг хүлээн авна." },
+      { title: "Үйлчилгээний нөхцөл", text: "Бараагаа зөв сонгоно уу. Буцаалт, солилт хийх боломжгүйг анхаарна уу. Гэмтэлтэй бараа ирсэн тохиолдолд бид хариуцна." },
+    ],
+  },
+};
+
 const TEMPLATES = [
   // ── 1. Aurora — хувцас / загвар ──────────────────────────────
   {
@@ -31,6 +46,7 @@ const TEMPLATES = [
         { type: "Hero", props: { id: "h", heading: "Шинэ улирлын цуглуулга", subheading: "Загварлаг, чанартай хувцасны шинэ түрээ.", image: img("aurora-hero", 1400, 600), ctaText: "Дэлгүүр үзэх", ctaHref: "#products" } },
         { type: "ProductGrid", props: { id: "g", heading: "Онцлох бараа", columns: "3", limit: 6 } },
         { type: "About", props: { id: "a", heading: "Бидний тухай", text: "Бид дэлхийн жишигт нийцсэн чанартай бүтээгдэхүүнийг хайраар хүргэдэг." } },
+        INFO_CARDS,
         { type: "Footer", props: { id: "f", text: "© 2026 Aurora — Бүх эрх хуулиар хамгаалагдсан" } },
       ],
     }),
@@ -57,6 +73,7 @@ const TEMPLATES = [
         { type: "Hero", props: { id: "h", heading: "Ирээдүйн технологи", subheading: "Шилдэг гаджетуудыг нэг дороос.", image: img("nova-hero", 1400, 600), ctaText: "Худалдаж авах", ctaHref: "#products" } },
         { type: "ProductGrid", props: { id: "g", heading: "Шинэ бараа", columns: "4", limit: 8 } },
         { type: "Text", props: { id: "t", text: "Бүх бараанд албан ёсны баталгаа болон хүргэлт үнэгүй.", align: "center" } },
+        INFO_CARDS,
         { type: "Footer", props: { id: "f", text: "© 2026 Nova Store" } },
       ],
     }),
@@ -85,6 +102,7 @@ const TEMPLATES = [
         { type: "Hero", props: { id: "h", heading: "Байгалийн гоо сайхан", subheading: "Арьсандаа ээлтэй, чанартай бүтээгдэхүүн.", image: img("bloom-hero", 1400, 600), ctaText: "Дэлгүүр үзэх", ctaHref: "#products" } },
         { type: "ProductGrid", props: { id: "g", heading: "Хамгийн их зарагдсан", columns: "3", limit: 6 } },
         { type: "About", props: { id: "a", heading: "Цэвэр найрлага", text: "Манай бүх бүтээгдэхүүн байгалийн гаралтай, амьтан туршилтгүй." } },
+        INFO_CARDS,
         { type: "Footer", props: { id: "f", text: "© 2026 Bloom Beauty" } },
       ],
     }),
@@ -111,6 +129,7 @@ const TEMPLATES = [
         { type: "Hero", props: { id: "h", heading: "Энгийн. Гоё.", subheading: "Чанарт төвлөрсөн минимал дэлгүүр.", image: "", ctaText: "Бараа үзэх", ctaHref: "#products" } },
         { type: "ProductGrid", props: { id: "g", heading: "Бүтээгдэхүүн", columns: "3", limit: 6 } },
         { type: "About", props: { id: "a", heading: "Манай философи", text: "Илүүдэлгүй, зөвхөн хэрэгтэй нь. Чанар бол бидний эхлэл." } },
+        INFO_CARDS,
         { type: "Footer", props: { id: "f", text: "© 2026 Mono" } },
       ],
     }),
@@ -137,6 +156,7 @@ const TEMPLATES = [
         { type: "Hero", props: { id: "h", heading: "Шинэхэн, эрүүл бүтээгдэхүүн", subheading: "Өдөр бүр шинэ, чанартай хүнс.", image: img("fresh-hero", 1400, 600), ctaText: "Захиалах", ctaHref: "#products" } },
         { type: "ProductGrid", props: { id: "g", heading: "Өнөөдрийн шинэ", columns: "4", limit: 8 } },
         { type: "About", props: { id: "a", heading: "Фермээс шууд", text: "Бид орон нутгийн фермерүүдтэй хамтран ажиллаж, хамгийн шинэхэн бүтээгдэхүүнийг хүргэдэг." } },
+        INFO_CARDS,
         { type: "Footer", props: { id: "f", text: "© 2026 Fresh Market" } },
       ],
     }),
