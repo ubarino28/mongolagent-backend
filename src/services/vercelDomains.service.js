@@ -49,7 +49,11 @@ async function priceData(domain) {
 async function search(q) {
   const base = baseName(q);
   if (!base || base.length < 2) return [];
-  const results = await Promise.all(OFFER_TLDS.map(async (tld) => {
+  // Хэрэглэгч тодорхой TLD бичсэн бол (жишээ "нэр.store") түүнийг тэргүүнд тавина
+  const dot = String(q || "").toLowerCase().indexOf(".");
+  const reqTld = dot >= 0 ? String(q).toLowerCase().slice(dot + 1).replace(/[^a-z]/g, "") : null;
+  const tldList = reqTld && !OFFER_TLDS.includes(reqTld) ? [reqTld, ...OFFER_TLDS] : OFFER_TLDS;
+  const results = await Promise.all(tldList.map(async (tld) => {
     const domain = `${base}.${tld}`;
     try {
       const avail = await availability(domain);
@@ -64,9 +68,15 @@ async function search(q) {
       };
     } catch { return { domain, tld, available: false }; }
   }));
-  // Боломжтойг эхэнд, .com тэргүүлүүлж эрэмбэлнэ
-  const order = (d) => OFFER_TLDS.indexOf(d.tld);
-  return results.sort((a, b) => (Number(b.available) - Number(a.available)) || (order(a) - order(b)));
+  // Эрэмбэ: 1) хайсан яг тэр TLD (захиалагдсан ч дээрээ), 2) боломжтой нь, 3) бусад захиалагдсан
+  const order = (d) => { const i = OFFER_TLDS.indexOf(d.tld); return i < 0 ? 99 : i; };
+  return results.sort((a, b) => {
+    if (reqTld) {
+      if (a.tld === reqTld && b.tld !== reqTld) return -1;
+      if (b.tld === reqTld && a.tld !== reqTld) return 1;
+    }
+    return (Number(b.available) - Number(a.available)) || (order(a) - order(b));
+  });
 }
 
 // TLD бүрийн суурь үнэ (нэрээс хамаарахгүй) — жагсаалтад харуулна. 6 цаг cache.
