@@ -67,7 +67,7 @@ app.use(cors({
 
 app.use(express.json());
 
-app.get("/health", (req, res) => res.json({ ok: true, service: "mongolagent-backend", version: "2026-06-18-v3-schedule-compat" }));
+app.get("/health", (req, res) => res.json({ ok: true, service: "mongolagent-backend", version: "2026-06-20-v4-restaurant" }));
 
 app.use("/webhook", webhookRouter);
 app.use("/admin", adminRouter);
