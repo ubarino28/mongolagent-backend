@@ -13,8 +13,29 @@
 
 const img = (seed, w = 600, h = 600) => `https://picsum.photos/seed/${seed}/${w}/${h}`;
 
+// Бидний тухай хуудасны контент (бүх template-д ерөнхий — хэрэглэгч дараа нь засна)
+function aboutContent() {
+  return {
+    root: { props: { title: "Бидний тухай" } },
+    content: [
+      { type: "About", props: { id: "ab", heading: "Бидний тухай", text: "Бид чанартай бүтээгдэхүүн, найдвартай үйлчилгээг үнэ цэнэтэйгээр хүргэхийг зорьдог. Үйлчлүүлэгч бүртээ хамгийн сайн туршлагыг бэлэглэхээр ажилладаг.", align: "center", headingSize: "lg", pad: "md" } },
+      { type: "Features", props: { id: "abf", heading: "Бидний давуу тал", columns: "3", gap: "md", align: "center", items: [
+        { title: "Чанарын баталгаа", text: "Сонгомол, шалгасан бараа." },
+        { title: "Хурдан хүргэлт", text: "Улаанбаатарт 24-48 цагт." },
+        { title: "Найдвартай төлбөр", text: "QPay-ээр аюулгүй төлнө." },
+      ] } },
+      { type: "ContactForm", props: { id: "abc", heading: "Бидэнтэй холбогдох", text: "Асуулт, саналаа доор үлдээгээрэй. Бид удахгүй хариулна." } },
+    ],
+  };
+}
+
+// Шинэ дэлгүүр бүрд үүсэх үндсэн хуудсууд: Нүүр + Бидний тухай + Захиалга хянах
 function homePage(content) {
-  return [{ title: "Нүүр", path: "/", type: "home", content }];
+  return [
+    { title: "Нүүр", path: "/", type: "home", content },
+    { title: "Бидний тухай", path: "/about", type: "about", content: aboutContent() },
+    { title: "Захиалга хянах", path: "/track", type: "tracking", content: { root: { props: { title: "Захиалга хянах" } }, content: [] } },
+  ];
 }
 
 // Гүйдэг зар (announcement) — олон template-д ашиглана
