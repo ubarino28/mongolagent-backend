@@ -20,7 +20,7 @@ const FX = Number(process.env.DOMAIN_USD_MNT) || 3700;          // буферт�
 const FLAT = Number(process.env.DOMAIN_FLAT_MARKUP) || 30000;  // домэйн тутамд тогтмол ашиг
 
 // Хэрэглэгчид санал болгох 15 TLD
-const OFFER_TLDS = ["com", "store", "shop", "online", "site", "xyz", "net", "co", "org", "biz", "info", "app", "me", "club", "pro"];
+const OFFER_TLDS = ["mn", "com", "store", "shop", "online", "site", "xyz", "net", "co", "org", "biz", "info", "app", "me", "club", "pro"];
 
 function enabled() { return !!TOKEN; }
 function headers() { return { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" }; }
