@@ -286,6 +286,50 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "check_menu",
+      description: "Ресторанын менюгийн жагсаалтыг авна — хоолны нэр, ангилал, үнэ, порц.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_tables",
+      description: "Ресторанын сул ширээ шалгана. date, time, guests дамжуулна.",
+      parameters: {
+        type: "object",
+        properties: {
+          date:   { type: "string", description: "YYYY-MM-DD" },
+          time:   { type: "string", description: "HH:MM" },
+          guests: { type: "number", description: "Хэдэн хүн" },
+        },
+        required: ["date", "time", "guests"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "save_reservation",
+      description: "Ширээ захиалга хадгалах. customerName, customerPhone ЗААВАЛ авсан байна.",
+      parameters: {
+        type: "object",
+        properties: {
+          tableId:       { type: "string" },
+          date:          { type: "string", description: "YYYY-MM-DD" },
+          timeSlot:      { type: "string", description: "HH:MM" },
+          guestCount:    { type: "number" },
+          customerName:  { type: "string" },
+          customerPhone: { type: "string" },
+          notes:         { type: "string" },
+        },
+        required: ["tableId", "date", "timeSlot", "guestCount", "customerPhone"],
+      },
+    },
+  },
 ];
 
 async function loadAISettings(orgId = null) {
@@ -538,6 +582,43 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
           const result = { success: true, duplicate: appt.duplicate || false };
           if (appt.qpayData) result.qpay = appt.qpayData;
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify(result) });
+        } catch (e) {
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: e.message }) });
+        }
+
+      } else if (toolCall.function.name === "check_menu") {
+        try {
+          const items = await prisma.turuuMenuItem.findMany({ where: { orgId, isActive: true }, orderBy: [{ category: "asc" }, { sortOrder: "asc" }] });
+          const menu = items.map((i) => {
+            const portions = Array.isArray(i.portions) ? i.portions : [];
+            const portionStr = portions.length > 0 ? portions.map((p) => `${p.name}: ${p.price}₮`).join(", ") : "";
+            return `${i.name} (${i.category || "Бусад"}) — ${i.price}₮${portionStr ? ` | Порц: ${portionStr}` : ""}${i.description ? ` | ${i.description}` : ""}`;
+          }).join("\n");
+          toolResults.push({ tool_call_id: toolCall.id, content: menu || "Меню хоосон байна." });
+        } catch {
+          toolResults.push({ tool_call_id: toolCall.id, content: "Меню авахад алдаа гарлаа." });
+        }
+
+      } else if (toolCall.function.name === "check_tables") {
+        try {
+          const { date, time, guests } = args;
+          const allTables = await prisma.turuuTable.findMany({ where: { orgId, isActive: true, capacity: { gte: Number(guests) || 1 } }, orderBy: { capacity: "asc" } });
+          const reservations = await prisma.turuuReservation.findMany({ where: { orgId, date, timeSlot: time, status: { not: "CANCELLED" } }, select: { tableId: true } });
+          const bookedIds = new Set(reservations.map((r) => r.tableId));
+          const available = allTables.filter((t) => !bookedIds.has(t.id));
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ available: available.map((t) => ({ id: t.id, tableNumber: t.tableNumber, capacity: t.capacity })), total: allTables.length }) });
+        } catch {
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Ширээ шалгахад алдаа гарлаа" }) });
+        }
+
+      } else if (toolCall.function.name === "save_reservation") {
+        try {
+          const conflict = await prisma.turuuReservation.findFirst({ where: { tableId: args.tableId, date: args.date, timeSlot: args.timeSlot, status: { not: "CANCELLED" } } });
+          if (conflict) throw new Error(`Уучлаарай, ${args.timeSlot} цагт тэр ширээ захиалагдсан байна.`);
+          const reservation = await prisma.turuuReservation.create({
+            data: { orgId, psid, tableId: args.tableId, date: args.date, timeSlot: args.timeSlot, guestCount: Number(args.guestCount), customerName: args.customerName, customerPhone: args.customerPhone, notes: args.notes },
+          });
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true, reservationId: reservation.id }) });
         } catch (e) {
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: e.message }) });
         }

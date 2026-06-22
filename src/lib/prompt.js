@@ -392,8 +392,29 @@ ${lbl.appointment.toUpperCase()}
     } catch { /* non-blocking */ }
   }
 
+  let restaurantBlock = "";
+  if (businessType === "restaurant") {
+    restaurantBlock = `━━━━━━━━━━━━━━━━━━━━━━━━━
+РЕСТОРАН: МЕНЮ + ШИРЭЭ ЗАХИАЛГА
+━━━━━━━━━━━━━━━━━━━━━━━━━
+МЕНЮ асуулт (хоолны жагсаалт, үнэ, порц):
+→ check_menu дуудаж менюгийн жагсаалтыг авна
+→ Хэрэглэгчид ангилалаар нь цэгцтэй танилцуулна
+
+ШИРЭЭ ЗАХИАЛГА:
+1. Хэдэн хүн, ямар өдөр, хэдэн цагт гэдгийг ол
+2. check_tables(date, time, guests) дуудаж сул ширээ шалга
+3. Сул ширээ байвал → нэр, утас ав
+4. БАТАЛГААЖУУЛ: "Ширээ захиалгаа баталгаажуулна уу?\\n📅 [date] [time]\\n👥 [guests] хүн\\n🪑 Ширээ #[tableNumber] ([capacity] хүний)\\n👤 [customerName]\\n📞 [customerPhone]\\nЗөв үү?"
+5. Баталгаажуулсны дараа save_reservation дуудна
+6. save_reservation алдаа буцаавал → "Тэр ширээ захиалагдсан байна" гэж хэлээд check_tables дахин дуудаж өөр ширээ санал болго
+✗ check_tables дуудалгүй ширээ санал болгохгүй
+✗ save_reservation дуудахын өмнө утас ЗААВАЛ авсан байна`;
+  }
+
   const parts = [body, imageBlock, variantImageBlock, visualMatchBlock];
   if (appointmentBlock) parts.push(appointmentBlock);
+  if (restaurantBlock) parts.push(restaurantBlock);
   parts.push(newConvLine);
   return parts.join("\n\n");
 }

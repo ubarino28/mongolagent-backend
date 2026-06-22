@@ -25,6 +25,50 @@ const { getPrisma } = require("./lib/db");
     await prisma.$executeRawUnsafe(
       `UPDATE "Organization" SET "subscriptionEndsAt" = "createdAt" + INTERVAL '30 days' WHERE "subscriptionEndsAt" IS NULL`
     );
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "TuruuMenuItem" (
+        "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+        "orgId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "category" TEXT,
+        "description" TEXT,
+        "price" DOUBLE PRECISION DEFAULT 0,
+        "portions" JSONB DEFAULT '[]',
+        "imageUrl" TEXT,
+        "isActive" BOOLEAN DEFAULT true,
+        "sortOrder" INTEGER DEFAULT 0,
+        "createdAt" TIMESTAMPTZ DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "TuruuTable" (
+        "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+        "orgId" TEXT NOT NULL,
+        "tableNumber" INTEGER NOT NULL,
+        "capacity" INTEGER DEFAULT 4,
+        "isActive" BOOLEAN DEFAULT true,
+        "createdAt" TIMESTAMPTZ DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "TuruuReservation" (
+        "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+        "orgId" TEXT NOT NULL,
+        "tableId" TEXT NOT NULL REFERENCES "TuruuTable"("id") ON DELETE CASCADE,
+        "date" TEXT NOT NULL,
+        "timeSlot" TEXT NOT NULL,
+        "guestCount" INTEGER NOT NULL,
+        "customerName" TEXT,
+        "customerPhone" TEXT,
+        "psid" TEXT,
+        "status" TEXT DEFAULT 'PENDING',
+        "notes" TEXT,
+        "createdAt" TIMESTAMPTZ DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ DEFAULT now()
+      )
+    `);
   } catch (e) {
     console.warn("[migration] variants column:", e.message);
   }
