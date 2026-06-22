@@ -438,6 +438,124 @@ router.patch("/orders/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Customers (захиалгаас цуглуулсан худалдан авагчид) ──────────────────────
+
+// GET /store/customers — захиалгуудаас хэрэглэгчдийг (утас/имэйлээр) нэгтгэж гаргана
+router.get("/customers", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const orders = await prisma.storeOrder.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "desc" } });
+
+    const map = new Map();
+    for (const o of orders) {
+      const key = (o.customerPhone || o.customerEmail || o.customerName || o.id).trim().toLowerCase();
+      if (!key) continue;
+      let c = map.get(key);
+      if (!c) {
+        c = { key, name: o.customerName || null, phone: o.customerPhone || null, email: o.customerEmail || null, address: o.deliveryAddress || null, orders: 0, totalSpent: 0, paidOrders: 0, lastOrderAt: o.createdAt, firstOrderAt: o.createdAt };
+        map.set(key, c);
+      }
+      c.orders += 1;
+      if (o.qpayStatus === "PAID" || o.status === "PAID" || o.status === "SHIPPED" || o.status === "DONE") { c.totalSpent += o.totalAmount || 0; c.paidOrders += 1; }
+      if (!c.name && o.customerName) c.name = o.customerName;
+      if (!c.email && o.customerEmail) c.email = o.customerEmail;
+      if (!c.address && o.deliveryAddress) c.address = o.deliveryAddress;
+      if (new Date(o.createdAt) > new Date(c.lastOrderAt)) c.lastOrderAt = o.createdAt;
+      if (new Date(o.createdAt) < new Date(c.firstOrderAt)) c.firstOrderAt = o.createdAt;
+    }
+    const customers = [...map.values()].sort((a, b) => new Date(b.lastOrderAt) - new Date(a.lastOrderAt));
+    res.json({ customers });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Discounts (купон / хямдрал) ─────────────────────────────────────────────
+
+function normalizeCode(s) {
+  return String(s || "").toUpperCase().trim().replace(/\s+/g, "");
+}
+
+// GET /store/discounts
+router.get("/discounts", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const discounts = await prisma.discount.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "desc" } });
+    res.json({ discounts });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /store/discounts
+router.post("/discounts", async (req, res) => {
+  try {
+    const { code, type, value, minAmount, maxUses, active, startsAt, endsAt } = req.body;
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const norm = normalizeCode(code);
+    if (!norm) return res.status(400).json({ error: "Купон код шаардлагатай" });
+    if (!["percent", "fixed"].includes(type)) return res.status(400).json({ error: "Төрөл буруу" });
+    const exists = await prisma.discount.findFirst({ where: { storeId: store.id, code: norm } });
+    if (exists) return res.status(409).json({ error: "Энэ код аль хэдийн байна" });
+    const discount = await prisma.discount.create({
+      data: {
+        storeId: store.id, orgId: req.org.orgId, code: norm, type,
+        value: Math.max(0, Number(value) || 0),
+        minAmount: Math.max(0, Number(minAmount) || 0),
+        maxUses: maxUses ? Math.max(1, Math.floor(Number(maxUses))) : null,
+        active: active !== false,
+        startsAt: startsAt ? new Date(startsAt) : null,
+        endsAt: endsAt ? new Date(endsAt) : null,
+      },
+    });
+    res.json({ discount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /store/discounts/:id
+router.put("/discounts/:id", async (req, res) => {
+  try {
+    const { code, type, value, minAmount, maxUses, active, startsAt, endsAt } = req.body;
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const existing = await prisma.discount.findFirst({ where: { id: req.params.id, storeId: store.id } });
+    if (!existing) return res.status(404).json({ error: "Купон олдсонгүй" });
+    const data = {};
+    if (code !== undefined) {
+      const norm = normalizeCode(code);
+      if (!norm) return res.status(400).json({ error: "Купон код шаардлагатай" });
+      const dup = await prisma.discount.findFirst({ where: { storeId: store.id, code: norm, NOT: { id: existing.id } } });
+      if (dup) return res.status(409).json({ error: "Энэ код аль хэдийн байна" });
+      data.code = norm;
+    }
+    if (type !== undefined) data.type = type;
+    if (value !== undefined) data.value = Math.max(0, Number(value) || 0);
+    if (minAmount !== undefined) data.minAmount = Math.max(0, Number(minAmount) || 0);
+    if (maxUses !== undefined) data.maxUses = maxUses ? Math.max(1, Math.floor(Number(maxUses))) : null;
+    if (active !== undefined) data.active = !!active;
+    if (startsAt !== undefined) data.startsAt = startsAt ? new Date(startsAt) : null;
+    if (endsAt !== undefined) data.endsAt = endsAt ? new Date(endsAt) : null;
+    const discount = await prisma.discount.update({ where: { id: existing.id }, data });
+    res.json({ discount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /store/discounts/:id
+router.delete("/discounts/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const existing = await prisma.discount.findFirst({ where: { id: req.params.id, storeId: store.id } });
+    if (!existing) return res.status(404).json({ error: "Купон олдсонгүй" });
+    await prisma.discount.delete({ where: { id: existing.id } });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Зураг upload ───────────────────────────────────────────────────────────
 
 // POST /store/upload — бараа/баннер зураг
