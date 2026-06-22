@@ -289,6 +289,8 @@ model StoreOrder {
   totalAmount     Float    @default(0)
   discountCode    String?                   // хэрэглэсэн купон код
   discountAmount  Float    @default(0)      // хямдруулсан дүн
+  deliveryMethod  String?                   // inUB | countryside | pickup
+  deliveryFee     Float    @default(0)      // хүргэлтийн төлбөр
   status          String   @default("NEW") // NEW | PAID | SHIPPED | DONE | CANCELLED
   notes           String?
   qpayInvoiceId   String?

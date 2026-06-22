@@ -134,7 +134,7 @@ router.post("/:slug/validate-discount", async (req, res) => {
 // body: { items: [{ productId, qty }], customer: { name, phone, email, address }, note, discountCode }
 router.post("/:slug/checkout", async (req, res) => {
   try {
-    const { items, customer = {}, note, discountCode } = req.body;
+    const { items, customer = {}, note, discountCode, deliveryMethod } = req.body;
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: "Сагс хоосон байна" });
 
     const prisma = getPrisma();
@@ -170,6 +170,17 @@ router.post("/:slug/checkout", async (req, res) => {
       total = Math.max(0, subtotal - discountAmount);
     }
 
+    // Хүргэлтийн төлбөр — store.delivery тохиргооноос сервер талд тооцоолно
+    const dconf = store.delivery || {};
+    const enabled = { inUB: !!dconf.inUB, countryside: !!dconf.countryside, pickup: !!dconf.pickup };
+    let dmethod = deliveryMethod && enabled[deliveryMethod] ? deliveryMethod : null;
+    let deliveryFee = 0;
+    if (dmethod && dmethod !== "pickup") {
+      const free = Number(dconf.freeOver) > 0 && subtotal >= Number(dconf.freeOver);
+      deliveryFee = free ? 0 : Math.max(0, Number(dconf.fee) || 0);
+    }
+    total = Math.max(0, total + deliveryFee);
+
     const order = await prisma.storeOrder.create({
       data: {
         storeId: store.id,
@@ -182,6 +193,8 @@ router.post("/:slug/checkout", async (req, res) => {
         totalAmount: total,
         discountCode: appliedDiscount ? appliedDiscount.code : null,
         discountAmount,
+        deliveryMethod: dmethod,
+        deliveryFee,
         notes: note || null,
         status: "NEW",
         qpayStatus: "PENDING",
@@ -197,7 +210,7 @@ router.post("/:slug/checkout", async (req, res) => {
     const org = await prisma.organization.findUnique({ where: { id: store.orgId } });
     if (!org?.qpayMerchantId || !org?.qpayAccountNumber) {
       // QPay тохируулаагүй — захиалга үүснэ, гэхдээ онлайн төлбөргүй
-      return res.json({ order: { id: order.id, totalAmount: total, subtotal, discountAmount, discountCode: order.discountCode, items: lineItems }, payment: null, message: "Захиалга хүлээн авлаа. Худалдагч тантай холбогдоно." });
+      return res.json({ order: { id: order.id, totalAmount: total, subtotal, discountAmount, discountCode: order.discountCode, deliveryFee, deliveryMethod: dmethod, items: lineItems }, payment: null, message: "Захиалга хүлээн авлаа. Худалдагч тантай холбогдоно." });
     }
 
     const result = await qpay.createInvoice({
@@ -222,7 +235,7 @@ router.post("/:slug/checkout", async (req, res) => {
     });
 
     res.json({
-      order: { id: order.id, totalAmount: total, subtotal, discountAmount, discountCode: order.discountCode, items: lineItems },
+      order: { id: order.id, totalAmount: total, subtotal, discountAmount, discountCode: order.discountCode, deliveryFee, deliveryMethod: dmethod, items: lineItems },
       payment: { invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls || [] },
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -241,6 +254,8 @@ router.get("/order/:id", async (req, res) => {
         qpayStatus: o.qpayStatus,
         totalAmount: o.totalAmount,
         discountAmount: o.discountAmount,
+        deliveryFee: o.deliveryFee,
+        deliveryMethod: o.deliveryMethod,
         items: o.items,
         customerName: o.customerName,
         createdAt: o.createdAt,
