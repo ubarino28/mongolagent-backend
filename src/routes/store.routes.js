@@ -378,7 +378,7 @@ router.get("/products", async (req, res) => {
 // POST /store/products
 router.post("/products", async (req, res) => {
   try {
-    const { name, description, price, compareAtPrice, images, stock, sku, category, active } = req.body;
+    const { name, description, price, compareAtPrice, images, variants, stock, sku, category, active } = req.body;
     if (!name) return res.status(400).json({ error: "name шаардлагатай" });
     const prisma = getPrisma();
     const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
@@ -393,6 +393,7 @@ router.post("/products", async (req, res) => {
         price: Number(price) || 0,
         compareAtPrice: compareAtPrice != null ? Number(compareAtPrice) : null,
         images: Array.isArray(images) ? images : [],
+        variants: Array.isArray(variants) ? variants : [],
         stock: Number(stock) || 0,
         sku: sku || null,
         category: category || null,
@@ -419,6 +420,7 @@ router.put("/products/:id", async (req, res) => {
     if (b.price !== undefined) data.price = Number(b.price) || 0;
     if (b.compareAtPrice !== undefined) data.compareAtPrice = b.compareAtPrice != null ? Number(b.compareAtPrice) : null;
     if (b.images !== undefined) data.images = Array.isArray(b.images) ? b.images : [];
+    if (b.variants !== undefined) data.variants = Array.isArray(b.variants) ? b.variants : [];
     if (b.stock !== undefined) data.stock = Number(b.stock) || 0;
     if (b.sku !== undefined) data.sku = b.sku;
     if (b.category !== undefined) data.category = b.category;

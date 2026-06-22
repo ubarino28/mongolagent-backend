@@ -167,6 +167,12 @@ router.post("/qpay-store/:orderId", async (req, res) => {
         data: { qpayStatus: "PAID", status: "PAID" },
       });
 
+      // Барааны нөөцийг хасах
+      try {
+        const { decrementStockForOrder } = require("../services/stock.service");
+        await decrementStockForOrder(prisma, order);
+      } catch { /* non-blocking */ }
+
       // Telegram мэдэгдэл
       try {
         const org = await prisma.organization.findUnique({
