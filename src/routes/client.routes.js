@@ -506,9 +506,10 @@ router.post("/settings/builder", async (req, res) => {
 
     // Одоо байгаа KB-г ачаалж Builder-д мэдүүлнэ
     const existingKB = await prisma.turuuKnowledge.findMany({
-      where: { orgId },
+      where: { orgId, active: true },
       select: { id: true, question: true, answer: true, variants: true },
     });
+    console.log("[BUILDER]", { orgId, kbCount: existingKB.length });
 
     const existingKBSummary = existingKB.length > 0
       ? existingKB.map((k) => {
