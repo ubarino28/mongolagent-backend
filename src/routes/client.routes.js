@@ -2663,6 +2663,21 @@ router.get("/reservations", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /client/reservations — гар аргаар ширээ захиалга нэмэх
+router.post("/reservations", async (req, res) => {
+  try {
+    const { tableId, date, timeSlot, guestCount, customerName, customerPhone } = req.body;
+    if (!tableId || !date || !timeSlot) return res.status(400).json({ error: "tableId, date, timeSlot шаардлагатай" });
+    const prisma = getPrisma();
+    const conflict = await prisma.turuuReservation.findFirst({ where: { tableId, date, timeSlot, status: { not: "CANCELLED" } } });
+    if (conflict) return res.status(400).json({ error: `Ширээ тэр цагт захиалагдсан байна` });
+    const reservation = await prisma.turuuReservation.create({
+      data: { orgId: req.org.orgId, tableId, date, timeSlot, guestCount: Number(guestCount) || 1, customerName, customerPhone },
+    });
+    res.json(reservation);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.put("/reservations/:id/status", async (req, res) => {
   try {
     const { status } = req.body;

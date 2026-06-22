@@ -602,13 +602,16 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
       } else if (toolCall.function.name === "check_tables") {
         try {
           const { date, time, guests } = args;
+          console.log("[CHECK_TABLES]", { orgId, date, time, guests });
           const allTables = await prisma.turuuTable.findMany({ where: { orgId, isActive: true, capacity: { gte: Number(guests) || 1 } }, orderBy: { capacity: "asc" } });
           const reservations = await prisma.turuuReservation.findMany({ where: { orgId, date, timeSlot: time, status: { not: "CANCELLED" } }, select: { tableId: true } });
           const bookedIds = new Set(reservations.map((r) => r.tableId));
           const available = allTables.filter((t) => !bookedIds.has(t.id));
+          console.log("[CHECK_TABLES] result:", { allTablesCount: allTables.length, reservationsCount: reservations.length, availableCount: available.length });
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ available: available.map((t) => ({ id: t.id, tableNumber: t.tableNumber, capacity: t.capacity })), total: allTables.length }) });
-        } catch {
-          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Ширээ шалгахад алдаа гарлаа" }) });
+        } catch (e) {
+          console.error("[CHECK_TABLES] error:", e.message);
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Ширээ шалгахад алдаа гарлаа: " + e.message }) });
         }
 
       } else if (toolCall.function.name === "save_reservation") {
