@@ -214,9 +214,10 @@ model Store {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  pages    StorePage[]
-  products Product[]
-  orders   StoreOrder[]
+  pages     StorePage[]
+  products  Product[]
+  orders    StoreOrder[]
+  discounts Discount[]
 }
 
 model StorePage {
@@ -254,6 +255,26 @@ model Product {
   updatedAt      DateTime @updatedAt
 }
 
+model Discount {
+  id        String   @id @default(uuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orgId     String
+  code      String                          // купон код (ихэвчлэн ТОМ үсгээр)
+  type      String   @default("percent")    // percent | fixed
+  value     Float    @default(0)            // 10 (=10%) эсвэл 5000 (=5000₮)
+  minAmount Float    @default(0)            // доод захиалгын дүн
+  maxUses   Int?                             // нийт ашиглах хязгаар (null = хязгааргүй)
+  usedCount Int      @default(0)
+  active    Boolean  @default(true)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([storeId, code])
+}
+
 model StoreOrder {
   id              String   @id @default(uuid())
   storeId         String
@@ -265,6 +286,8 @@ model StoreOrder {
   deliveryAddress String?
   items           Json     @default("[]") // сагсны бараанууд
   totalAmount     Float    @default(0)
+  discountCode    String?                   // хэрэглэсэн купон код
+  discountAmount  Float    @default(0)      // хямдруулсан дүн
   status          String   @default("NEW") // NEW | PAID | SHIPPED | DONE | CANCELLED
   notes           String?
   qpayInvoiceId   String?

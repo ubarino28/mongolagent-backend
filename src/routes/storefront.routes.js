@@ -40,6 +40,23 @@ function publicProduct(p) {
   };
 }
 
+// Купон шалгаж, хямдруулах дүнг тооцоолох
+// → { ok, discount, amount, error }
+async function evalDiscount(prisma, storeId, code, subtotal) {
+  const norm = String(code || "").toUpperCase().trim().replace(/\s+/g, "");
+  if (!norm) return { ok: false, error: "Код оруулна уу", amount: 0 };
+  const d = await prisma.discount.findFirst({ where: { storeId, code: norm } });
+  if (!d || !d.active) return { ok: false, error: "Купон олдсонгүй", amount: 0 };
+  const now = new Date();
+  if (d.startsAt && now < new Date(d.startsAt)) return { ok: false, error: "Купон идэвхжээгүй байна", amount: 0 };
+  if (d.endsAt && now > new Date(d.endsAt)) return { ok: false, error: "Купоны хугацаа дууссан", amount: 0 };
+  if (d.maxUses != null && d.usedCount >= d.maxUses) return { ok: false, error: "Купоны хязгаар дууссан", amount: 0 };
+  if (subtotal < (d.minAmount || 0)) return { ok: false, error: `Доод дүн ${Number(d.minAmount).toLocaleString()}₮`, amount: 0 };
+  let amount = d.type === "percent" ? Math.round(subtotal * (d.value / 100)) : Math.round(d.value);
+  amount = Math.min(amount, subtotal); // нийт дүнгээс хэтрэхгүй
+  return { ok: true, discount: d, amount };
+}
+
 // ─── Site resolve ───────────────────────────────────────────────────────────
 
 // GET /storefront/site?host=slug.mongolagent.mn  (эсвэл ?slug=)
@@ -99,11 +116,24 @@ router.get("/:slug/product/:id", async (req, res) => {
 
 // ─── Checkout ─────────────────────────────────────────────────────────────────
 
+// POST /storefront/:slug/validate-discount — сагсан дээр купон шалгах
+// body: { code, subtotal }
+router.post("/:slug/validate-discount", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { slug: String(req.params.slug).toLowerCase() }, select: { id: true, status: true } });
+    if (!store || store.status !== "published") return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const r = await evalDiscount(prisma, store.id, req.body.code, Math.max(0, Number(req.body.subtotal) || 0));
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    res.json({ ok: true, code: r.discount.code, type: r.discount.type, value: r.discount.value, amount: r.amount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /storefront/:slug/checkout
-// body: { items: [{ productId, qty }], customer: { name, phone, email, address }, note }
+// body: { items: [{ productId, qty }], customer: { name, phone, email, address }, note, discountCode }
 router.post("/:slug/checkout", async (req, res) => {
   try {
-    const { items, customer = {}, note } = req.body;
+    const { items, customer = {}, note, discountCode } = req.body;
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: "Сагс хоосон байна" });
 
     const prisma = getPrisma();
@@ -127,6 +157,18 @@ router.post("/:slug/checkout", async (req, res) => {
       lineItems.push({ productId: p.id, name: p.name, price: p.price, qty, lineTotal, image: Array.isArray(p.images) ? p.images[0] || null : null });
     }
 
+    // Купон хямдрал (байвал) — сервер талд дахин шалгаж тооцоолно
+    const subtotal = total;
+    let discountAmount = 0;
+    let appliedDiscount = null;
+    if (discountCode) {
+      const r = await evalDiscount(prisma, store.id, discountCode, subtotal);
+      if (!r.ok) return res.status(400).json({ error: r.error });
+      discountAmount = r.amount;
+      appliedDiscount = r.discount;
+      total = Math.max(0, subtotal - discountAmount);
+    }
+
     const order = await prisma.storeOrder.create({
       data: {
         storeId: store.id,
@@ -137,17 +179,24 @@ router.post("/:slug/checkout", async (req, res) => {
         deliveryAddress: customer.address || null,
         items: lineItems,
         totalAmount: total,
+        discountCode: appliedDiscount ? appliedDiscount.code : null,
+        discountAmount,
         notes: note || null,
         status: "NEW",
         qpayStatus: "PENDING",
       },
     });
 
+    // Купоны ашиглалтын тоог нэмэгдүүлэх
+    if (appliedDiscount) {
+      await prisma.discount.update({ where: { id: appliedDiscount.id }, data: { usedCount: { increment: 1 } } }).catch(() => {});
+    }
+
     // QPay invoice — org-ийн merchant/банкны мэдээлэл байвал
     const org = await prisma.organization.findUnique({ where: { id: store.orgId } });
     if (!org?.qpayMerchantId || !org?.qpayAccountNumber) {
       // QPay тохируулаагүй — захиалга үүснэ, гэхдээ онлайн төлбөргүй
-      return res.json({ order: { id: order.id, totalAmount: total, items: lineItems }, payment: null, message: "Захиалга хүлээн авлаа. Худалдагч тантай холбогдоно." });
+      return res.json({ order: { id: order.id, totalAmount: total, subtotal, discountAmount, discountCode: order.discountCode, items: lineItems }, payment: null, message: "Захиалга хүлээн авлаа. Худалдагч тантай холбогдоно." });
     }
 
     const result = await qpay.createInvoice({
@@ -172,7 +221,7 @@ router.post("/:slug/checkout", async (req, res) => {
     });
 
     res.json({
-      order: { id: order.id, totalAmount: total, items: lineItems },
+      order: { id: order.id, totalAmount: total, subtotal, discountAmount, discountCode: order.discountCode, items: lineItems },
       payment: { invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls || [] },
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
