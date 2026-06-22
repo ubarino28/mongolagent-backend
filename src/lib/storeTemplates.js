@@ -29,12 +29,36 @@ function aboutContent() {
   };
 }
 
-// Шинэ дэлгүүр бүрд үүсэх үндсэн хуудсууд: Нүүр + Бидний тухай + Захиалга хянах
+// Барааны хуудасны загвар — барааны үндсэн мэдээллийн ДООР харагдах section-ууд.
+// Хэрэглэгч builder дээр засна; product page бүрд хэрэглэгдэнэ.
+function productTemplateContent() {
+  return {
+    root: { props: { title: "Барааны хуудас" } },
+    content: [
+      { type: "TrustBadges", props: { id: "pt-badges", align: "center", items: [
+        { label: "Найдвартай төлбөр" }, { label: "Хурдан хүргэлт" }, { label: "Баталгаат бараа" }, { label: "24/7 тусламж" },
+      ] } },
+      { type: "Newsletter", props: { id: "pt-nl", heading: "Шинэ бараа, хямдралын мэдээ", text: "Имэйлээ үлдээгээд онцгой саналуудыг түрүүлж аваарай.", buttonText: "Бүртгүүлэх", align: "center" } },
+    ],
+  };
+}
+
+// Шинэ дэлгүүр бүрд үүсэх үндсэн хуудсууд: Нүүр + Бидний тухай + Захиалга хянах + Барааны хуудас
 function homePage(content) {
   return [
     { title: "Нүүр", path: "/", type: "home", content },
     { title: "Бидний тухай", path: "/about", type: "about", content: aboutContent() },
     { title: "Захиалга хянах", path: "/track", type: "tracking", content: { root: { props: { title: "Захиалга хянах" } }, content: [] } },
+    { title: "Барааны хуудас", path: "/__product", type: "product", content: productTemplateContent() },
+  ];
+}
+
+// Шинэ дэлгүүрт орох default нэмэлт хуудсууд (нүүрнээс бусад) — backfill-д ашиглана
+function defaultExtraPages() {
+  return [
+    { title: "Бидний тухай", path: "/about", type: "about", content: aboutContent() },
+    { title: "Захиалга хянах", path: "/track", type: "tracking", content: { root: { props: { title: "Захиалга хянах" } }, content: [] } },
+    { title: "Барааны хуудас", path: "/__product", type: "product", content: productTemplateContent() },
   ];
 }
 
@@ -292,4 +316,4 @@ function getTemplate(id) {
   return TEMPLATES.find((t) => t.id === id) || null;
 }
 
-module.exports = { TEMPLATES, listTemplates, getTemplate };
+module.exports = { TEMPLATES, listTemplates, getTemplate, defaultExtraPages };
