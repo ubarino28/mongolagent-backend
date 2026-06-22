@@ -75,4 +75,44 @@ async function removeStoreDomain(slug) {
   }
 }
 
-module.exports = { addStoreDomain, removeStoreDomain, enabled, domainFor };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// {slug}.mongolagent.mn дээр HTTPS (SSL) ажиллаж байгаа эсэхийг шалгана.
+// TLS handshake амжвал true; гэрчилгээ гараагүй бол алдаа шиднэ → false.
+async function checkSSL(slug) {
+  const host = domainFor(slug);
+  try {
+    await axios.head(`https://${host}`, { timeout: 6000, maxRedirects: 0, validateStatus: () => true });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Гэрчилгээ гацсан үед дахин trigger хийх — домэйнийг хасаад дахин нэмнэ
+async function reprovisionStoreDomain(slug) {
+  await removeStoreDomain(slug);
+  await sleep(1500);
+  return addStoreDomain(slug);
+}
+
+// Домэйнийг нэмээд, SSL ажиллах хүртэл хүлээнэ. Хэт удвал нэг удаа дахин trigger хийнэ.
+// → { ok, domain, ssl }
+async function ensureStoreDomain(slug, { maxWaitMs = 18000, nudgeAfterMs = 7000, intervalMs = 2500 } = {}) {
+  const add = await addStoreDomain(slug);
+  if (!enabled()) return { ...add, ssl: false };
+  const start = Date.now();
+  let nudged = false;
+  while (Date.now() - start < maxWaitMs) {
+    if (await checkSSL(slug)) return { ok: true, domain: domainFor(slug), ssl: true };
+    if (!nudged && Date.now() - start >= nudgeAfterMs) {
+      nudged = true;
+      await reprovisionStoreDomain(slug).catch(() => {});
+    }
+    await sleep(intervalMs);
+  }
+  const ssl = await checkSSL(slug);
+  return { ok: true, domain: domainFor(slug), ssl };
+}
+
+module.exports = { addStoreDomain, removeStoreDomain, reprovisionStoreDomain, ensureStoreDomain, checkSSL, enabled, domainFor };
