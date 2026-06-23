@@ -258,6 +258,9 @@ model Store {
   email        String?
   address      String?
   delivery     Json     @default("{}")    // хүргэлтийн тохиргоо (төрөл, төлбөр, үнэгүй босго)
+  webPlan      String   @default("trial")  // trial | active | expired
+  trialEndsAt  DateTime?
+  webExpiresAt DateTime?
   publishedAt  DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -340,6 +343,25 @@ model Discount {
   updatedAt DateTime @updatedAt
 
   @@unique([storeId, code])
+}
+
+model WebWallet {
+  id        String   @id @default(uuid())
+  orgId     String   @unique
+  balance   Float    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WebWalletTx {
+  id            String   @id @default(uuid())
+  orgId         String
+  amount        Float
+  type          String   // topup | deduct
+  description   String?
+  qpayInvoiceId String?
+  qpayStatus    String?  @default("PENDING")
+  createdAt     DateTime @default(now())
 }
 
 model StoreOrder {

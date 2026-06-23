@@ -97,9 +97,10 @@ router.post("/", async (req, res) => {
         slug: storeSlug,
         templateId: templateId || null,
         theme,
-        // Дэлгүүр үүсэмгүй шууд амьд (нийтлэх алхамгүй)
         status: "published",
         publishedAt: new Date(),
+        webPlan: "trial",
+        trialEndsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
         pages: template
           ? {
               create: template.pages.map((p, i) => ({
@@ -725,6 +726,171 @@ router.post("/upload", upload.single("file"), handleUploadError, async (req, res
     console.error("[store/upload] Error:", e.message);
     res.status(500).json({ error: "Зураг байршуулахад алдаа гарлаа. Дахин оролдоно уу." });
   }
+});
+
+// ─── Trial / Subscription Expiry ────────────────────────────────────────────
+
+// POST /store/cron/expire — trial/subscription дууссан дэлгүүрүүдийг draft болгоно
+router.post("/cron/expire", async (req, res) => {
+  const secret = req.headers["x-cron-secret"];
+  if (secret !== process.env.CRON_SECRET) return res.status(403).json({ error: "forbidden" });
+
+  try {
+    const prisma = getPrisma();
+    const now = new Date();
+
+    const expired = await prisma.store.updateMany({
+      where: {
+        status: "published",
+        OR: [
+          { webPlan: "trial", trialEndsAt: { lt: now } },
+          { webPlan: "active", webExpiresAt: { lt: now } },
+        ],
+      },
+      data: { status: "draft", webPlan: "expired" },
+    });
+
+    res.json({ ok: true, expiredCount: expired.count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Subscription & Wallet ──────────────────────────────────────────────────
+
+const WEB_PLAN_PRICE = 99000; // ₮/сар
+
+// GET /store/subscription — subscription + wallet мэдээлэл
+router.get("/subscription", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({
+      where: { orgId: req.org.orgId },
+      select: { webPlan: true, trialEndsAt: true, webExpiresAt: true, slug: true, status: true },
+    });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    let wallet = await prisma.webWallet.findUnique({ where: { orgId: req.org.orgId } });
+    if (!wallet) wallet = await prisma.webWallet.create({ data: { orgId: req.org.orgId } });
+
+    const txs = await prisma.webWalletTx.findMany({
+      where: { orgId: req.org.orgId },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+
+    res.json({
+      plan: store.webPlan,
+      trialEndsAt: store.trialEndsAt,
+      webExpiresAt: store.webExpiresAt,
+      storeStatus: store.status,
+      slug: store.slug,
+      wallet: { balance: wallet.balance },
+      transactions: txs,
+      price: WEB_PLAN_PRICE,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /store/subscription/topup — хэтэвч цэнэглэх QPay invoice
+router.post("/subscription/topup", async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const topupAmount = Number(amount);
+    if (!topupAmount || topupAmount < 1000) return res.status(400).json({ error: "Хамгийн бага цэнэглэх дүн 1,000₮" });
+
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { slug: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    const apiUrl = process.env.API_URL || "https://api.mongolagent.mn";
+    const inv = await platformQpay.createInvoice({
+      orgId: req.org.orgId,
+      plan: "website-topup",
+      amount: topupAmount,
+      description: `MA-WEBSITE-${store.slug.toUpperCase()}`,
+      callbackUrl: `${apiUrl}/webhook/web-wallet/${req.org.orgId}`,
+    });
+
+    const tx = await prisma.webWalletTx.create({
+      data: {
+        orgId: req.org.orgId,
+        amount: topupAmount,
+        type: "topup",
+        description: `Хэтэвч цэнэглэлт ${topupAmount.toLocaleString()}₮`,
+        qpayInvoiceId: inv.invoice_id,
+        qpayStatus: "PENDING",
+      },
+    });
+
+    res.json({
+      txId: tx.id,
+      qr_text: inv.qr_text,
+      qr_image: inv.qr_image,
+      urls: inv.urls,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /store/subscription/topup/:txId/check — төлбөр шалгах
+router.post("/subscription/topup/:txId/check", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const tx = await prisma.webWalletTx.findUnique({ where: { id: req.params.txId } });
+    if (!tx || tx.orgId !== req.org.orgId) return res.status(404).json({ error: "Гүйлгээ олдсонгүй" });
+    if (tx.qpayStatus === "PAID") return res.json({ status: "PAID", balance: (await prisma.webWallet.findUnique({ where: { orgId: req.org.orgId } }))?.balance ?? 0 });
+
+    const result = await platformQpay.checkPayment(tx.qpayInvoiceId);
+    const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+    if (!paid) return res.json({ status: "PENDING" });
+
+    await prisma.webWalletTx.update({ where: { id: tx.id }, data: { qpayStatus: "PAID" } });
+    const wallet = await prisma.webWallet.upsert({
+      where: { orgId: req.org.orgId },
+      create: { orgId: req.org.orgId, balance: tx.amount },
+      update: { balance: { increment: tx.amount } },
+    });
+
+    res.json({ status: "PAID", balance: wallet.balance });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /store/subscription/activate — хэтэвчээс хасаж 1 сар сунгах
+router.post("/subscription/activate", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const wallet = await prisma.webWallet.findUnique({ where: { orgId: req.org.orgId } });
+    if (!wallet || wallet.balance < WEB_PLAN_PRICE) {
+      return res.status(400).json({ error: `Хэтэвчинд хүрэлцэхгүй байна. ${WEB_PLAN_PRICE.toLocaleString()}₮ шаардлагатай.` });
+    }
+
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true, webExpiresAt: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    const now = new Date();
+    const currentEnd = store.webExpiresAt && store.webExpiresAt > now ? store.webExpiresAt : now;
+    const newEnd = new Date(currentEnd.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    await prisma.$transaction([
+      prisma.webWallet.update({
+        where: { orgId: req.org.orgId },
+        data: { balance: { decrement: WEB_PLAN_PRICE } },
+      }),
+      prisma.webWalletTx.create({
+        data: {
+          orgId: req.org.orgId,
+          amount: -WEB_PLAN_PRICE,
+          type: "deduct",
+          description: `Үйлчилгээний эрх сунгалт (1 сар)`,
+          qpayStatus: "PAID",
+        },
+      }),
+      prisma.store.update({
+        where: { orgId: req.org.orgId },
+        data: { webPlan: "active", webExpiresAt: newEnd, status: "published" },
+      }),
+    ]);
+
+    res.json({ ok: true, webExpiresAt: newEnd });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 module.exports = router;

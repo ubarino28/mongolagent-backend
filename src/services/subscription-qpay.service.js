@@ -11,7 +11,7 @@ function _headers(token) {
 }
 
 // Subscription invoice үүсгэх → Mongol Agent-ийн өөрийн данс руу
-async function createInvoice({ orgId, plan, amount, description }) {
+async function createInvoice({ orgId, plan, amount, description, callbackUrl }) {
   const merchantId = process.env.PLATFORM_QPAY_MERCHANT_ID;
   const bankCode   = process.env.PLATFORM_BANK_CODE   || "050000";
   const accountNo  = process.env.PLATFORM_ACCOUNT_NUMBER;
@@ -29,7 +29,7 @@ async function createInvoice({ orgId, plan, amount, description }) {
     currency:      "MNT",
     customer_name: "Mongol Agent",
     customer_logo: "",
-    callback_url:  `${apiUrl}/webhook/sub-qpay/${orgId}`,
+    callback_url:  callbackUrl || `${apiUrl}/webhook/sub-qpay/${orgId}`,
     description:   description || `Mongol Agent — ${plan} план`,
     mcc_code:      "",
     bank_accounts: [{

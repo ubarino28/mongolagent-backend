@@ -304,4 +304,36 @@ router.post("/sub-qpay/:orgId", async (req, res) => {
   });
 });
 
+// Website wallet topup QPay callback — POST /webhook/web-wallet/:orgId
+router.post("/web-wallet/:orgId", async (req, res) => {
+  res.json({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      const prisma = getPrisma();
+      const tx = await prisma.webWalletTx.findFirst({
+        where: { orgId: req.params.orgId, qpayStatus: "PENDING", type: "topup" },
+        orderBy: { createdAt: "desc" },
+      });
+      if (!tx) return;
+
+      const subQpay = require("../services/subscription-qpay.service");
+      const result = await subQpay.checkPayment(tx.qpayInvoiceId);
+      const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+      if (!paid) return;
+
+      await prisma.webWalletTx.update({ where: { id: tx.id }, data: { qpayStatus: "PAID" } });
+      await prisma.webWallet.upsert({
+        where: { orgId: req.params.orgId },
+        create: { orgId: req.params.orgId, balance: tx.amount },
+        update: { balance: { increment: tx.amount } },
+      });
+
+      console.log(`[WebWallet] Org ${req.params.orgId} topped up ${tx.amount}₮`);
+    } catch (err) {
+      console.error("[WebWallet callback]", err.message);
+    }
+  });
+});
+
 module.exports = router;
