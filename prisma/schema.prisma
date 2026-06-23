@@ -265,10 +265,11 @@ model Store {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  pages     StorePage[]
-  products  Product[]
-  orders    StoreOrder[]
-  discounts Discount[]
+  pages      StorePage[]
+  products   Product[]
+  orders     StoreOrder[]
+  discounts  Discount[]
+  categories StoreCategory[]
 }
 
 model StorePage {
@@ -285,6 +286,21 @@ model StorePage {
   updatedAt DateTime @updatedAt
 
   @@unique([storeId, path])
+}
+
+model StoreCategory {
+  id        String   @id @default(uuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orgId     String
+  name      String
+  slug      String
+  image     String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([storeId, slug])
 }
 
 model Product {

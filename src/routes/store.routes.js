@@ -702,6 +702,89 @@ router.get("/domain/purchase/:id/status", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Ангилал (Categories) ────────────────────────────────────────────────────
+
+function slugify(text) {
+  return text.toLowerCase().replace(/[^\wЀ-ӿ]+/g, "-").replace(/^-|-$/g, "") || "cat";
+}
+
+// GET /store/categories
+router.get("/categories", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    const categories = await prisma.storeCategory.findMany({
+      where: { storeId: store.id },
+      orderBy: { sortOrder: "asc" },
+    });
+
+    const productCounts = await prisma.product.groupBy({
+      by: ["category"],
+      where: { storeId: store.id, active: true },
+      _count: true,
+    });
+    const countMap = {};
+    for (const pc of productCounts) {
+      if (pc.category) countMap[pc.category] = pc._count;
+    }
+
+    res.json({ categories: categories.map(c => ({ ...c, productCount: countMap[c.name] || 0 })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /store/categories
+router.post("/categories", async (req, res) => {
+  try {
+    const { name, image } = req.body;
+    if (!name) return res.status(400).json({ error: "Ангилалын нэр шаардлагатай" });
+
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    const count = await prisma.storeCategory.count({ where: { storeId: store.id } });
+    let slug = slugify(name);
+    const exists = await prisma.storeCategory.findUnique({ where: { storeId_slug: { storeId: store.id, slug } } });
+    if (exists) slug = `${slug}-${Date.now().toString(36)}`;
+
+    const cat = await prisma.storeCategory.create({
+      data: { storeId: store.id, orgId: req.org.orgId, name, slug, image: image || null, sortOrder: count },
+    });
+    res.json({ category: cat });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH /store/categories/:id
+router.patch("/categories/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const cat = await prisma.storeCategory.findUnique({ where: { id: req.params.id } });
+    if (!cat || cat.orgId !== req.org.orgId) return res.status(404).json({ error: "Ангилал олдсонгүй" });
+
+    const data = {};
+    if (req.body.name !== undefined) { data.name = req.body.name; data.slug = slugify(req.body.name); }
+    if (req.body.image !== undefined) data.image = req.body.image;
+    if (req.body.sortOrder !== undefined) data.sortOrder = Number(req.body.sortOrder);
+
+    const updated = await prisma.storeCategory.update({ where: { id: req.params.id }, data });
+    res.json({ category: updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /store/categories/:id
+router.delete("/categories/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const cat = await prisma.storeCategory.findUnique({ where: { id: req.params.id } });
+    if (!cat || cat.orgId !== req.org.orgId) return res.status(404).json({ error: "Ангилал олдсонгүй" });
+
+    await prisma.storeCategory.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Зураг upload ───────────────────────────────────────────────────────────
 
 // POST /store/upload — бараа/баннер зураг

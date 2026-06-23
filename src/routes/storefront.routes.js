@@ -94,6 +94,17 @@ router.get("/site", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /storefront/:slug/categories
+router.get("/:slug/categories", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { slug: String(req.params.slug).toLowerCase() }, select: { id: true, status: true } });
+    if (!store || store.status !== "published") return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const categories = await prisma.storeCategory.findMany({ where: { storeId: store.id }, orderBy: { sortOrder: "asc" } });
+    res.json({ categories });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /storefront/:slug/products
 router.get("/:slug/products", async (req, res) => {
   try {
