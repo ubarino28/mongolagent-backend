@@ -2433,7 +2433,7 @@ router.get("/appointments", async (req, res) => {
 router.put("/appointments/:id/status", async (req, res) => {
   try {
     const { status } = req.body;
-    if (!["PENDING", "CONFIRMED", "CANCELLED"].includes(status)) return res.status(400).json({ error: "status буруу" });
+    if (!["PENDING", "CONFIRMED", "CANCELLED", "COMPLETED"].includes(status)) return res.status(400).json({ error: "status буруу" });
     const prisma = getPrisma();
     const appt = await prisma.turuuAppointment.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
     if (!appt) return res.status(404).json({ error: "Олдсонгүй" });
@@ -2681,7 +2681,7 @@ router.post("/reservations", async (req, res) => {
 router.put("/reservations/:id/status", async (req, res) => {
   try {
     const { status } = req.body;
-    if (!["PENDING", "CONFIRMED", "CANCELLED"].includes(status)) return res.status(400).json({ error: "status буруу" });
+    if (!["PENDING", "CONFIRMED", "CANCELLED", "COMPLETED"].includes(status)) return res.status(400).json({ error: "status буруу" });
     const prisma = getPrisma();
     const r = await prisma.turuuReservation.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
     if (!r) return res.status(404).json({ error: "Олдсонгүй" });
