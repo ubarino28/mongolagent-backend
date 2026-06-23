@@ -1,19 +1,7 @@
 "use strict";
 
-/**
- * Website builder template-ууд (Shopify theme store маяг).
- *
- * Template бүр:
- *   theme        — өнгө, фонт
- *   pages        — нүүр хуудасны Puck блокууд (Hero/ProductGrid/About/Footer г.м)
- *   demoProducts — жишээ бараа (хэрэглэгч сонгоход дэлгүүр шууд дүүрэн харагдана)
- *
- * Зургийг picsum.photos-оор demo болгож авна (хэрэглэгч дараа нь өөрийн зургаар солино).
- */
-
 const img = (seed, w = 600, h = 600) => `https://picsum.photos/seed/${seed}/${w}/${h}`;
 
-// Бидний тухай хуудасны контент (бүх template-д ерөнхий — хэрэглэгч дараа нь засна)
 function aboutContent() {
   return {
     root: { props: { title: "Бидний тухай" } },
@@ -29,8 +17,6 @@ function aboutContent() {
   };
 }
 
-// Барааны хуудасны загвар — барааны үндсэн мэдээллийн ДООР харагдах section-ууд.
-// Хэрэглэгч builder дээр засна; product page бүрд хэрэглэгдэнэ.
 function productTemplateContent() {
   return {
     root: { props: { title: "Барааны хуудас" } },
@@ -43,7 +29,6 @@ function productTemplateContent() {
   };
 }
 
-// Шинэ дэлгүүр бүрд үүсэх үндсэн хуудсууд: Нүүр + Бидний тухай + Захиалга хянах + Барааны хуудас
 function homePage(content) {
   return [
     { title: "Нүүр", path: "/", type: "home", content },
@@ -53,7 +38,6 @@ function homePage(content) {
   ];
 }
 
-// Шинэ дэлгүүрт орох default нэмэлт хуудсууд (нүүрнээс бусад) — backfill-д ашиглана
 function defaultExtraPages() {
   return [
     { title: "Бидний тухай", path: "/about", type: "about", content: aboutContent() },
@@ -62,14 +46,10 @@ function defaultExtraPages() {
   ];
 }
 
-// Гүйдэг зар (announcement) — олон template-д ашиглана
 const announce = (text, bgColor, txtColor) => ({ type: "Announcement", props: { id: "ann", text, bgColor, txtColor: txtColor || "#ffffff" } });
-// Ангилал картууд
 const categories = (id, heading, items, extra = {}) => ({ type: "Categories", props: { id, heading, items, columns: String(items.length > 4 ? 4 : items.length), gap: "md", radius: "lg", ratio: "4/3", overlay: 30, ...extra } });
-// Сэтгэгдэл
 const testimonials = (id, heading, items, extra = {}) => ({ type: "Testimonials", props: { id, heading, items, columns: "3", gap: "md", radius: "lg", cardStyle: "fill", ...extra } });
 
-// Бүх template-д default-аар орох "Захиалгын мэдээлэл" хэсэг
 const INFO_CARDS = {
   type: "InfoCards",
   props: {
@@ -85,231 +65,123 @@ const INFO_CARDS = {
 };
 
 const TEMPLATES = [
-  // ── 1. Aurora — хувцас / загвар ──────────────────────────────
+  // ── 1. Power — Gymshark-inspired фитнесс / спорт хувцас ──────────
   {
-    id: "aurora",
-    name: "Aurora",
-    description: "Хувцас, загварын дэлгүүрт тохирох гоёмсог, цэвэрхэн загвар.",
-    category: "Хувцас",
-    theme: { primaryColor: "#111111", bgColor: "#ffffff", textColor: "#1a1a1a", font: "Lora" },
+    id: "power",
+    name: "Power",
+    description: "Gymshark-аас сэдэвлэсэн спорт хувцасны дэлгүүр. Хүчирхэг, хар өнгөний загвар.",
+    category: "Спорт хувцас",
+    preview: "zagvar1",
+    theme: { primaryColor: "#111111", bgColor: "#ffffff", textColor: "#111111", font: "Inter" },
     pages: homePage({
       root: { props: { title: "Нүүр" } },
       content: [
-        announce("✦ Шинэ улирлын цуглуулга ирлээ · Үнэгүй хүргэлт 100,000₮-с дээш · -20% хүртэл хямдрал", "#111111"),
-        { type: "Hero", props: { id: "h", heading: "Шинэ улирлын цуглуулга", subheading: "Загварлаг, чанартай хувцасны шинэ түрээ.", image: img("aurora-hero", 1400, 700), ctaText: "Дэлгүүр үзэх", ctaHref: "#products", ctaColor: "#111111", align: "center", height: "lg", headingSize: "xl", overlay: 35 } },
-        categories("cat", "Ангилал", [
-          { label: "Дээд хувцас", image: img("aurora-cat1", 600, 450) },
-          { label: "Гадуур хувцас", image: img("aurora-cat2", 600, 450) },
-          { label: "Гутал", image: img("aurora-cat3", 600, 450) },
-        ]),
-        { type: "ProductGrid", props: { id: "g", heading: "Онцлох бараа", columns: "3", limit: 6, gap: "md", cardRadius: "md", pad: "md" } },
-        { type: "ImageText", props: { id: "it", heading: "Бидний түүх", text: "Aurora нь чанар, загвар хоёрыг хослуулсан монгол брэнд. Бид дэлхийн жишигт нийцсэн материалаар хязгаарлагдмал цуглуулга бүтээдэг.", image: img("aurora-story", 800, 600), imagePosition: "left", buttonText: "Дэлгэрэнгүй", buttonHref: "#products", radius: "lg", ratio: "4/3", align: "left" } },
-        { type: "Features", props: { id: "fe", heading: "Яагаад Aurora гэж?", columns: "3", gap: "md", align: "center", items: [
-          { title: "Чанарын баталгаа", text: "Сонгомол материал, нямбай оёдол." },
-          { title: "Хурдан хүргэлт", text: "Улаанбаатарт 24-48 цагт." },
-          { title: "Амар буцаалт", text: "14 хоногийн дотор солилт." },
-        ] } },
-        testimonials("ts", "Үйлчлүүлэгчдийн сэтгэгдэл", [
-          { name: "Ану", role: "Байнгын үйлчлүүлэгч", text: "Чанар нь үнэхээр гайхалтай. Дахин авна!" },
-          { name: "Тэмүүлэн", role: "", text: "Хүргэлт хурдан, баглаа боодол гоё." },
-          { name: "Сэлэнгэ", role: "", text: "Загвар нь онцгой, бусдаас ялгарна." },
-        ]),
-        INFO_CARDS,
-        { type: "Newsletter", props: { id: "nl", heading: "Шинэ цуглуулгаас түрүүлж аваарай", text: "Имэйлээ үлдээгээд хямдрал, шинэ бараагаа хамгийн түрүүнд аваарай.", buttonText: "Бүртгүүлэх", align: "center" } },
-        { type: "Footer", props: { id: "f", text: "© 2026 Aurora — Бүх эрх хуулиар хамгаалагдсан" } },
-      ],
-    }),
-    demoProducts: [
-      { name: "Оверсайз цамц", price: 89000, compareAtPrice: 120000, category: "Дээд хувцас", description: "Зөөлөн, амьсгалдаг хөвөн материалаар хийсэн оверсайз загварын цамц. Өдөр тутмын хэрэглээнд тав тухтай, аль ч биеийн галбирт зохицно.", images: [img("aurora-1")] },
-      { name: "Хөвөн футболк", price: 45000, category: "Дээд хувцас", description: "100% органик хөвөн футболк. Арьсанд ээлтэй, угаалгад тэсвэртэй, өнгө нь гандахгүй.", images: [img("aurora-2")] },
-      { name: "Деним хүрэм", price: 159000, category: "Гадуур хувцас", description: "Сонгодог деним хүрэм. Бат бөх материал, аль ч улирал, загварт зохицсон цаг үеэс ангид загвар.", images: [img("aurora-3")] },
-      { name: "Маалинган өмд", price: 98000, category: "Доод хувцас", description: "Хөнгөн, амьсгалдаг маалинган өмд. Зуны улиралд сэрүүн, тав тухтай өмсгөл.", images: [img("aurora-4")] },
-      { name: "Нэхмэл цамц", price: 75000, compareAtPrice: 95000, category: "Дээд хувцас", description: "Дулаахан нэхмэл цамц. Намар, өвлийн улиралд тав тухтай, зөөлөн утсаар нэхсэн.", images: [img("aurora-5")] },
-      { name: "Арьсан гутал", price: 210000, category: "Гутал", description: "Жинхэнэ арьсан гутал. Гар хийц, удаан эдэлгээтэй, хөлд эвтэйхэн тусгай улталттай.", images: [img("aurora-6")] },
-    ],
-  },
+        announce("🔥 ШИНЭ ЦУГЛУУЛГА ИРЛЭЭ · ҮНЭГҮЙ ХҮРГЭЛТ 80,000₮+ · БУЦААЛТ 14 ХОНОГ", "#111111"),
 
-  // ── 2. Nova — технологи / электроник ─────────────────────────
-  {
-    id: "nova",
-    name: "Nova",
-    description: "Электроник, гаджетын дэлгүүрт тохирох орчин үеийн загвар.",
-    category: "Технологи",
-    theme: { primaryColor: "#6366f1", bgColor: "#ffffff", textColor: "#0f172a", font: "Inter" },
-    pages: homePage({
-      root: { props: { title: "Нүүр" } },
-      content: [
-        announce("⚡ Бүх бараанд албан ёсны баталгаа · Үнэгүй хүргэлт · QPay-ээр хялбар төлбөр", "#6366f1"),
-        { type: "Slideshow", props: { id: "ss", height: "lg", align: "center", overlay: 45, speed: 5, slides: [
-          { image: img("nova-slide1", 1400, 700), heading: "Ирээдүйн технологи", subheading: "Шилдэг гаджетуудыг нэг дороос.", ctaText: "Худалдаж авах", ctaHref: "#products" },
-          { image: img("nova-slide2", 1400, 700), heading: "Шинэ үеийн дэлгэц", subheading: "4K тод байдал, өндөр гүйцэтгэл.", ctaText: "Үзэх", ctaHref: "#products" },
-        ] } },
-        categories("cat", "Бүлгүүд", [
-          { label: "Аудио", image: img("nova-cat1", 600, 450) },
-          { label: "Компьютер", image: img("nova-cat2", 600, 450) },
-          { label: "Гаджет", image: img("nova-cat3", 600, 450) },
-          { label: "Дагалдах", image: img("nova-cat4", 600, 450) },
-        ], { columns: "4" }),
-        { type: "ProductGrid", props: { id: "g", heading: "Шинэ бараа", columns: "4", limit: 8, gap: "md", cardRadius: "lg", pad: "md" } },
-        { type: "Banner", props: { id: "bn", heading: "Зуны их хямдрал", text: "Сонгосон гаджетууд -30% хүртэл хямдарлаа.", buttonText: "Хямдралыг үзэх", buttonHref: "#products", bgColor: "#6366f1", btnColor: "#ffffff", btnTextColor: "#4338ca", align: "center", headingSize: "lg", radius: "lg" } },
-        { type: "Stats", props: { id: "st", columns: "4", size: "lg", valueColor: "#6366f1", items: [
-          { value: "50k+", label: "Үйлчлүүлэгч" },
-          { value: "12k+", label: "Захиалга" },
-          { value: "4.9", label: "Дундаж үнэлгээ" },
-          { value: "24/7", label: "Тусламж" },
-        ] } },
-        { type: "Features", props: { id: "fe", heading: "Манай давуу тал", columns: "3", gap: "md", iconColor: "#eef0fe", align: "center", items: [
-          { title: "Албан ёсны баталгаа", text: "Бүх бараа 1+ жилийн баталгаатай." },
-          { title: "Үнэгүй хүргэлт", text: "100,000₮-с дээш захиалгад." },
-          { title: "Найдвартай төлбөр", text: "QPay болон картаар аюулгүй." },
-        ] } },
-        INFO_CARDS,
-        { type: "Newsletter", props: { id: "nl", heading: "Шинэ бүтээгдэхүүний мэдээ", text: "Технологийн шинэ бараа, онцгой саналыг имэйлээр аваарай.", buttonText: "Бүртгүүлэх", align: "center", btnColor: "#6366f1" } },
-        { type: "Footer", props: { id: "f", text: "© 2026 Nova Store" } },
-      ],
-    }),
-    demoProducts: [
-      { name: "Утасгүй чихэвч", price: 189000, compareAtPrice: 230000, category: "Аудио", description: "Идэвхтэй чимээ дарагч (ANC) утасгүй чихэвч. 30 цаг хүртэл цэнэгтэй, тунгалаг өндөр чанарын дуу.", images: [img("nova-1")] },
-      { name: "Ухаалаг цаг", price: 320000, category: "Гаджет", description: "AMOLED дэлгэцтэй ухаалаг цаг. Зүрхний цохилт, нойр, алхам хэмжих, ус нэвтэрдэггүй.", images: [img("nova-2")] },
-      { name: "Bluetooth чанга яригч", price: 145000, category: "Аудио", description: "Зөөврийн усны хамгаалалттай чанга яригч. Гүн басс, 12 цагийн тоглуулалт.", images: [img("nova-3")] },
-      { name: "Зөөврийн цэнэглэгч", price: 79000, category: "Дагалдах", description: "20,000mAh багтаамжтай хурдан цэнэглэгч. Хоёр төхөөрөмж зэрэг цэнэглэнэ.", images: [img("nova-4")] },
-      { name: "Механик гар", price: 260000, compareAtPrice: 300000, category: "Компьютер", description: "RGB гэрэлтэй механик гар. Тактиль шилжүүлэгч, удаан эдэлгээтэй, тоглоом болон ажилд тохиромжтой.", images: [img("nova-5")] },
-      { name: "USB-C хаб", price: 98000, category: "Дагалдах", description: "7-in-1 USB-C хаб. HDMI 4K, USB 3.0, SD карт уншигч, хурдан өгөгдөл дамжуулалт.", images: [img("nova-6")] },
-      { name: "Веб камер 4K", price: 175000, category: "Компьютер", description: "4K нягтаршилтай веб камер. Автомат фокус, чимээ дарагч микрофонтой.", images: [img("nova-7")] },
-      { name: "Тоглоомын хулгана", price: 110000, category: "Компьютер", description: "16,000 DPI мэдрэгчтэй тоглоомын хулгана. Программчлагдах товч, RGB гэрэл.", images: [img("nova-8")] },
-    ],
-  },
+        // Hero — Gymshark маягийн бүтэн дэлгэцийн banner
+        { type: "Hero", props: {
+          id: "hero", heading: "ХЯЗГААРГҮЙ БОЛОМЖ", subheading: "Чиний дасгалын хамтрагч. Чанартай спорт хувцас, Монголоос монголчуудад.",
+          image: img("gym-hero-power", 1400, 700), ctaText: "ДЭЛГҮҮР ҮЗЭХ", ctaHref: "#products",
+          ctaColor: "#ffffff", align: "center", height: "lg", headingSize: "xl", overlay: 45
+        }},
 
-  // ── 3. Bloom — гоо сайхан / арьс арчилгаа ────────────────────
-  {
-    id: "bloom",
-    name: "Bloom",
-    description: "Гоо сайхан, арьс арчилгааны бараанд тохирох зөөлөн загвар.",
-    category: "Гоо сайхан",
-    theme: { primaryColor: "#db2777", bgColor: "#fff7fb", textColor: "#3f1d2e", font: "Montserrat" },
-    pages: homePage({
-      root: { props: { title: "Нүүр" } },
-      content: [
-        announce("🌸 Байгалийн найрлага · Амьтан туршилтгүй · Үнэгүй дээж бэлэглэнэ", "#db2777"),
-        { type: "Hero", props: { id: "h", heading: "Байгалийн гоо сайхан", subheading: "Арьсандаа ээлтэй, чанартай бүтээгдэхүүн.", image: img("bloom-hero", 1400, 700), ctaText: "Дэлгүүр үзэх", ctaHref: "#products", ctaColor: "#db2777", align: "left", height: "lg", headingSize: "xl", overlay: 25 } },
-        categories("cat", "Ангилал", [
-          { label: "Арьс арчилгаа", image: img("bloom-cat1", 600, 450) },
-          { label: "Гоо сайхан", image: img("bloom-cat2", 600, 450) },
-          { label: "Үнэртэн", image: img("bloom-cat3", 600, 450) },
-        ], { radius: "full", overlay: 20 }),
-        { type: "ProductGrid", props: { id: "g", heading: "Хамгийн их зарагдсан", columns: "3", limit: 6, gap: "lg", cardRadius: "lg", pad: "md" } },
-        { type: "ImageText", props: { id: "it", heading: "Цэвэр найрлага", text: "Манай бүх бүтээгдэхүүн байгалийн гаралтай, парабен болон хортой нэмэлтгүй. Арьсыг гэмтээхгүйгээр гялалзуулна.", image: img("bloom-story", 800, 600), imagePosition: "right", buttonText: "", radius: "lg", ratio: "1/1", align: "left", btnColor: "#db2777" } },
-        { type: "Gallery", props: { id: "gal", heading: "Инстаграм", columns: "4", gap: "sm", radius: "md", ratio: "1/1", images: [
-          { src: img("bloom-g1", 400, 400) }, { src: img("bloom-g2", 400, 400) }, { src: img("bloom-g3", 400, 400) }, { src: img("bloom-g4", 400, 400) },
-        ] } },
-        testimonials("ts", "Хэрэглэгчид юу гэж хэлдэг вэ?", [
-          { name: "Номин", role: "", text: "Арьс минь үнэхээр зөөлөрсөн. Хайртай боллоо!" },
-          { name: "Алтанцэцэг", role: "", text: "Үнэр нь гайхалтай, найрлага цэвэрхэн." },
-          { name: "Энхжин", role: "", text: "Мэдрэг арьсанд тохирч байна. Баярлалаа." },
+        // Ангилал — Gymshark: Men / Women / Accessories
+        categories("cat", "", [
+          { label: "ЭРЭГТЭЙ", image: img("gym-men", 600, 450) },
+          { label: "ЭМЭГТЭЙ", image: img("gym-women", 600, 450) },
+          { label: "АКСЕССУАР", image: img("gym-acc", 600, 450) },
+        ], { radius: "md", overlay: 40, ratio: "3/4", gap: "sm" }),
+
+        // Шинэ бараа
+        { type: "ProductGrid", props: { id: "new", heading: "ШИНЭ ИРСЭН", columns: "4", limit: 8, gap: "md", cardRadius: "sm", pad: "md" } },
+
+        // Motivational banner
+        { type: "Banner", props: {
+          id: "cta1", heading: "БҮТЭЭ. ТЭМЦЭЛ. ЯЛАЛТ.", text: "Дасгал бүр чамайг хүчтэй болгоно. Зөв хувцас, зөв урам.",
+          buttonText: "БҮХ БАРАА ҮЗЭХ", buttonHref: "#products",
+          bgColor: "#111111", btnColor: "#ffffff", btnTextColor: "#111111",
+          align: "center", headingSize: "xl", radius: "none"
+        }},
+
+        // Давуу тал — Gymshark маягаар
+        { type: "Features", props: {
+          id: "feat", heading: "ЯАГААД БИД ГЭЖ?", columns: "4", gap: "md", align: "center",
+          iconColor: "#111111", iconFg: "#ffffff",
+          items: [
+            { title: "Чанартай материал", text: "4-талт уян материал, тэсвэртэй, арьсанд ээлтэй.", icon: "shield" },
+            { title: "Үнэгүй хүргэлт", text: "80,000₮-с дээш захиалгад хүргэлт үнэгүй.", icon: "truck" },
+            { title: "14 хоногийн буцаалт", text: "Таалагдаагүй бол 14 хоногт буцаах боломжтой.", icon: "refresh" },
+            { title: "Хурдан хүргэлт", text: "Улаанбаатарт 24 цагт хүргэнэ.", icon: "zap" },
+          ]
+        }},
+
+        // Тоо баримт
+        { type: "Stats", props: {
+          id: "stats", columns: "4", size: "lg", valueColor: "#111111",
+          items: [
+            { value: "25K+", label: "Идэвхтэй хэрэглэгч" },
+            { value: "50K+", label: "Борлуулсан бараа" },
+            { value: "4.9", label: "Дундаж үнэлгээ" },
+            { value: "24/7", label: "Хэрэглэгчийн тусламж" },
+          ]
+        }},
+
+        // Брэндийн түүх
+        { type: "ImageText", props: {
+          id: "story", heading: "БИДНИЙ ТҮҮХ", text: "Бид 2024 онд Улаанбаатарт үүсгэн байгуулагдсан. Монгол тамирчид, фитнесс сонирхогчдод зориулсан чанартай спорт хувцас бүтээх нь бидний зорилго. Дэлхийн жишигт нийцсэн материал, загвараар монгол хүмүүстээ зориулж ажилладаг.",
+          image: img("gym-brand-story", 800, 600), imagePosition: "left",
+          buttonText: "ДЭЛГЭРЭНГҮЙ", buttonHref: "/about",
+          radius: "md", ratio: "4/3", align: "left", btnColor: "#111111"
+        }},
+
+        // Slideshow — хоёр дахь hero section (Gymshark collection маяг)
+        { type: "Slideshow", props: {
+          id: "slide", height: "md", align: "center", overlay: 50, speed: 5,
+          slides: [
+            { image: img("gym-slide1", 1400, 600), heading: "ESSENTIAL COLLECTION", subheading: "Өдөр тутмын дасгалд зориулсан үндсэн цуглуулга.", ctaText: "ҮЗЭХ", ctaHref: "#products" },
+            { image: img("gym-slide2", 1400, 600), heading: "WINTER TRAINING", subheading: "Өвлийн хүйтэнд ч халуун дасгал.", ctaText: "ХУДАЛДАЖ АВАХ", ctaHref: "#products" },
+          ]
+        }},
+
+        // Сэтгэгдэл
+        testimonials("test", "ХЭРЭГЛЭГЧДИЙН СЭТГЭГДЭЛ", [
+          { name: "Б. Тэмүүжин", role: "Фитнесс тренер", text: "Чанар нь үнэхээр гайхалтай. Дасгалын үед тав тухтай, хөлрөхөд ч хурдан хатдаг. Тренерүүддээ санал болгодог." },
+          { name: "М. Сарантуяа", role: "Иога багш", text: "Леггинг нь маш уян хатан, ямар ч хөдөлгөөнд саадгүй. Дахин дахин захиалдаг." },
+          { name: "Д. Ганбат", role: "Бодибилдер", text: "Футболк нь биед сайн таарч, дасгалын үед чөлөөтэй хөдөлнө. Материал нь бат бөх." },
         ], { cardStyle: "shadow" }),
-        INFO_CARDS,
-        { type: "Newsletter", props: { id: "nl", heading: "Гоо сайхны зөвлөгөө аваарай", text: "Шинэ бараа, арьс арчилгааны зөвлөгөөг имэйлээр хүлээн аваарай.", buttonText: "Бүртгүүлэх", align: "center", btnColor: "#db2777" } },
-        { type: "Footer", props: { id: "f", text: "© 2026 Bloom Beauty" } },
-      ],
-    }),
-    demoProducts: [
-      { name: "Чийгшүүлэгч тос", price: 68000, category: "Арьс арчилгаа", description: "Гиалуроны хүчилтэй гүн чийгшүүлэгч тос. Арьсыг 24 цагийн турш чийгээр хангаж, зөөлрүүлнэ.", images: [img("bloom-1")] },
-      { name: "Нүүрний цэвэрлэгч", price: 42000, compareAtPrice: 55000, category: "Арьс арчилгаа", description: "Зөөлөн хөөсрөх цэвэрлэгч. Тос, бохирдлыг арилгаж, арьсыг хатаалгүй цэвэрлэнэ.", images: [img("bloom-2")] },
-      { name: "Сэрум C аминдэм", price: 89000, category: "Арьс арчилгаа", description: "C аминдэмт гэрэлтүүлэг өгөх сэрум. Толбо саарагдуулж, арьсыг гэрэлтэй болгоно.", images: [img("bloom-3")] },
-      { name: "Уруулын тос", price: 35000, category: "Гоо сайхан", description: "Тэжээллэг уруулын тос. Хагарсан уруулыг эдгээж, зөөлөн, гялалзсан болгоно.", images: [img("bloom-4")] },
-      { name: "Нүдний маск", price: 28000, category: "Арьс арчилгаа", description: "Нүдний доорх хаван, харласныг бууруулах гель маск. Сэрүүцүүлэх нөлөөтэй.", images: [img("bloom-5")] },
-      { name: "Үнэртэн", price: 120000, compareAtPrice: 150000, category: "Үнэртэн", description: "Удаан тогтох цэцгэн нот бүхий үнэртэн. Өдөр, оройн аль ч үед тохиромжтой.", images: [img("bloom-6")] },
-    ],
-  },
 
-  // ── 4. Mono — минимал / монохром ─────────────────────────────
-  {
-    id: "mono",
-    name: "Mono",
-    description: "Хар цагаан, маш цэвэрхэн минимал загвар — аливаа бараанд тохирно.",
-    category: "Минимал",
-    theme: { primaryColor: "#18181b", bgColor: "#fafafa", textColor: "#18181b", font: "Inter" },
-    pages: homePage({
-      root: { props: { title: "Нүүр" } },
-      content: [
-        announce("ЭНГИЙН. ГОЁ. — Хязгаарлагдмал цуглуулга · Үнэгүй хүргэлт", "#18181b"),
-        { type: "Hero", props: { id: "h", heading: "Энгийн. Гоё.", subheading: "Чанарт төвлөрсөн минимал дэлгүүр.", image: "", ctaText: "Бараа үзэх", ctaHref: "#products", ctaColor: "#18181b", align: "center", height: "md", headingSize: "xl" } },
-        { type: "Features", props: { id: "fe", heading: "", columns: "3", gap: "lg", align: "left", iconColor: "#18181b", items: [
-          { title: "Илүүдэлгүй дизайн", text: "Зөвхөн хэрэгтэй нь, цэвэрхэн." },
-          { title: "Удаан эдэлгээ", text: "Чанартай материал, бат бөх." },
-          { title: "Цаг үеэс ангид", text: "Загвар нь хэзээ ч хуучрахгүй." },
-        ] } },
-        { type: "ProductGrid", props: { id: "g", heading: "Бүтээгдэхүүн", columns: "3", limit: 6, gap: "lg", cardRadius: "none", pad: "lg" } },
-        { type: "About", props: { id: "a", heading: "Манай философи", text: "Илүүдэлгүй, зөвхөн хэрэгтэй нь. Чанар бол бидний эхлэл. Бид цөөн боловч төгс зүйлд итгэдэг.", align: "center", headingSize: "lg", bg: "#f4f4f5", pad: "lg" } },
-        { type: "Gallery", props: { id: "gal", heading: "", columns: "3", gap: "sm", radius: "none", ratio: "1/1", images: [
-          { src: img("mono-g1", 400, 400) }, { src: img("mono-g2", 400, 400) }, { src: img("mono-g3", 400, 400) },
-        ] } },
         INFO_CARDS,
-        { type: "Footer", props: { id: "f", text: "© 2026 Mono" } },
-      ],
-    }),
-    demoProducts: [
-      { name: "Керамик аяга", price: 32000, category: "Гэр ахуй", description: "Гар хийц керамик аяга. Минимал загвар, 350мл багтаамж, халуун хүйтэн ундаанд тохиромжтой.", images: [img("mono-1")] },
-      { name: "Тэмдэглэлийн дэвтэр", price: 18000, category: "Бичиг хэрэг", description: "Цэгэн хуудастай тэмдэглэлийн дэвтэр. Зузаан цаас, тэгш нээгддэг хавтас.", images: [img("mono-2")] },
-      { name: "Модон тавиур", price: 56000, category: "Гэр ахуй", description: "Байгалийн модоор хийсэн тавиур. Гал тогоо, хооллоход тохиромжтой энгийн дизайн.", images: [img("mono-3")] },
-      { name: "Хөвөн алчуур", price: 24000, compareAtPrice: 30000, category: "Гэр ахуй", description: "100% хөвөн алчуур. Усыг сайн шингээдэг, зөөлөн, удаан эдэлгээтэй.", images: [img("mono-4")] },
-      { name: "Шилэн ваар", price: 45000, category: "Гэр ахуй", description: "Тунгалаг шилэн ваар. Цэцэг, чимэглэлд тохирох цэвэрхэн минимал хэлбэр.", images: [img("mono-5")] },
-      { name: "Лааны суурь", price: 38000, category: "Гэр ахуй", description: "Бетон лааны суурь. Дулаан уур амьсгал бүрдүүлэх энгийн чимэглэл.", images: [img("mono-6")] },
-    ],
-  },
 
-  // ── 5. Fresh — хүнс / органик ────────────────────────────────
-  {
-    id: "fresh",
-    name: "Fresh",
-    description: "Хүнс, органик бүтээгдэхүүний дэлгүүрт тохирох дулаан загвар.",
-    category: "Хүнс",
-    theme: { primaryColor: "#16a34a", bgColor: "#f7faf5", textColor: "#14271a", font: "Inter" },
-    pages: homePage({
-      root: { props: { title: "Нүүр" } },
-      content: [
-        announce("🥬 Өдөр бүр шинэхэн · Фермээс шууд · Тухайн өдөртөө хүргэнэ", "#16a34a"),
-        { type: "Hero", props: { id: "h", heading: "Шинэхэн, эрүүл бүтээгдэхүүн", subheading: "Өдөр бүр шинэ, чанартай хүнс.", image: img("fresh-hero", 1400, 700), ctaText: "Захиалах", ctaHref: "#products", ctaColor: "#16a34a", align: "center", height: "lg", headingSize: "xl", overlay: 35 } },
-        categories("cat", "Ангилал", [
-          { label: "Жимс", image: img("fresh-cat1", 600, 450) },
-          { label: "Ногоо", image: img("fresh-cat2", 600, 450) },
-          { label: "Талх", image: img("fresh-cat3", 600, 450) },
-          { label: "Уух зүйл", image: img("fresh-cat4", 600, 450) },
-        ], { columns: "4", radius: "lg" }),
-        { type: "ProductGrid", props: { id: "g", heading: "Өнөөдрийн шинэ", columns: "4", limit: 8, gap: "md", cardRadius: "lg", pad: "md" } },
-        { type: "Features", props: { id: "fe", heading: "Бидний амлалт", columns: "4", gap: "md", iconColor: "#dcfce7", align: "center", items: [
-          { title: "100% шинэхэн", text: "Тухайн өдрийн ургац." },
-          { title: "Фермээс шууд", text: "Зуучлагчгүй, шударга үнэ." },
-          { title: "Хурдан хүргэлт", text: "2-4 цагт гэрт тань." },
-          { title: "Органик", text: "Химийн бордоогүй." },
-        ] } },
-        { type: "ImageText", props: { id: "it", heading: "Фермээс шууд", text: "Бид орон нутгийн фермерүүдтэй хамтран ажиллаж, хамгийн шинэхэн бүтээгдэхүүнийг таны гэрт хүргэдэг. Эрүүл хооллолт шинэхэн орцноос эхэлдэг.", image: img("fresh-story", 800, 600), imagePosition: "left", buttonText: "Захиалах", buttonHref: "#products", radius: "lg", ratio: "4/3", align: "left", btnColor: "#16a34a" } },
-        testimonials("ts", "Үйлчлүүлэгчдийн сэтгэгдэл", [
-          { name: "Б. Оюун", role: "", text: "Ногоо нь үнэхээр шинэхэн. Гэр бүлээрээ хэрэглэдэг." },
-          { name: "Г. Болор", role: "", text: "Хүргэлт хурдан, чанар нь гайхалтай." },
-          { name: "Д. Мөнх", role: "", text: "Үнэ хямд, чанар сайн. Санал болгож байна." },
-        ], { cardStyle: "border" }),
-        INFO_CARDS,
-        { type: "Newsletter", props: { id: "nl", heading: "Долоо хоног бүрийн шинэ ургац", text: "Имэйлээ үлдээгээд шинэ бараа, хямдралын мэдээг аваарай.", buttonText: "Бүртгүүлэх", align: "center", btnColor: "#16a34a" } },
-        { type: "Footer", props: { id: "f", text: "© 2026 Fresh Market" } },
+        // Newsletter
+        { type: "Newsletter", props: {
+          id: "nl", heading: "ШИНЭ ЦУГЛУУЛГА, ХЯМДРАЛААС ХАМГИЙН ТҮРҮҮНД МЭДЭЖ АВ",
+          text: "Имэйлээ бүртгүүлээд 10% хямдрал, шинэ бараагаа хамгийн түрүүнд аваарай.",
+          buttonText: "БҮРТГҮҮЛЭХ", align: "center", btnColor: "#111111"
+        }},
+
+        // Footer
+        { type: "Footer", props: { id: "f", text: "© 2026 Power — Бүх эрх хуулиар хамгаалагдсан" } },
       ],
     }),
     demoProducts: [
-      { name: "Органик зөгийн бал", price: 28000, category: "Хүнс", description: "100% цэвэр органик зөгийн бал. Нэмэлт чихэргүй, байгалийн витамин, эрдсээр баялаг.", images: [img("fresh-1")] },
-      { name: "Шинэ жимс багц", price: 35000, compareAtPrice: 42000, category: "Жимс", description: "Тухайн өдрийн шинэ жимсний холимог багц. Улирлын чанартай, сонгомол жимс.", images: [img("fresh-2")] },
-      { name: "Гар хийц талх", price: 12000, category: "Талх", description: "Уламжлалт аргаар жигнэсэн гар хийц талх. Хадгаламжийн бодисгүй, өдөр бүр шинэхэн.", images: [img("fresh-3")] },
-      { name: "Органик өндөг (10ш)", price: 9000, category: "Хүнс", description: "Чөлөөт тэжээврийн тахианы органик өндөг. 10 ширхэгтэй багц, шинэхэн.", images: [img("fresh-4")] },
-      { name: "Ногоон цай", price: 22000, category: "Уух зүйл", description: "Антиоксидантаар баялаг дээд зэрэглэлийн ногоон цай. Сэргээх, тайвшруулах нөлөөтэй.", images: [img("fresh-5")] },
-      { name: "Самрын хольц", price: 31000, category: "Зууш", description: "Шарсан самар, хатаасан жимсний эрүүл хольц. Давсгүй, эрчим хүч өгөх зууш.", images: [img("fresh-6")] },
-      { name: "Цэвэр ус 5л", price: 6000, category: "Уух зүйл", description: "Байгалийн рашаан ус, 5 литр. Эрдэс баялаг, өдөр тутмын хэрэглээнд.", images: [img("fresh-7")] },
-      { name: "Органик ногоо багц", price: 26000, category: "Ногоо", description: "Орон нутгийн фермээс шууд органик ногооны багц. Химийн бордоогүй, шинэхэн.", images: [img("fresh-8")] },
+      { name: "Essential футболк", price: 45000, category: "Эрэгтэй", description: "Хөнгөн, амьсгалдаг материалаар хийсэн дасгалын футболк. Хөлрөхөд хурдан хатаж, тав тухтай байдлыг хадгална. Аль ч дасгалын төрөлд тохиромжтой.", images: [img("gym-tee1")] },
+      { name: "Flex леггинг", price: 65000, compareAtPrice: 79000, category: "Эмэгтэй", description: "4-талт уян хатан материалтай леггинг. Иога, пилатес, фитнессд тохиромжтой. Бүсэлхийд таатай суух, ямар ч хөдөлгөөнд саадгүй.", images: [img("gym-legging1")] },
+      { name: "Training хүрэм", price: 89000, category: "Эрэгтэй", description: "Дулаан fleece доторлогчтой хүрэм. Дасгалын өмнө болон дараа өмсөхөд тохиромжтой. Том халаас, тохируулагддаг малгайтай.", images: [img("gym-hoodie1")] },
+      { name: "Sport шорт", price: 39000, category: "Эрэгтэй", description: "Хөнгөн, хурдан хатдаг материалтай дасгалын шорт. Дотор давхар доторлогчтой, хажуу халаастай.", images: [img("gym-shorts1")] },
+      { name: "Seamless спорт шүүгээ", price: 55000, category: "Эмэгтэй", description: "Оёдолгүй загварын спорт шүүгээ. Дунд зэргийн тулгуур, тав тухтай. Дасгалд болон өдөр тутамд.", images: [img("gym-bra1")] },
+      { name: "Performance футболк", price: 49000, category: "Эмэгтэй", description: "Croppped загварын дасгалын футболк. DryFit технологи, хурдан хатдаг, хөнгөн, загварлаг.", images: [img("gym-crop1")] },
+      { name: "Дасгалын бээлий", price: 25000, category: "Аксессуар", description: "Эрэгтэй, эмэгтэй хоёуланд зориулсан бат бөх дасгалын бээлий. Алганд гулсалтгүй, бугуйг хамгаалах сунадаг хэсэгтэй.", images: [img("gym-gloves")] },
+      { name: "Спорт цүнх", price: 69000, compareAtPrice: 85000, category: "Аксессуар", description: "42л багтаамжтай спорт цүнх. Гутлын тусгай хэсэг, нойтон хувцасны халаас, усны савны халаас. Тэсвэртэй материал.", images: [img("gym-bag1")] },
+      { name: "Ус савлагч 1л", price: 18000, category: "Аксессуар", description: "1 литр багтаамжтай BPA-free ус савлагч. Нэг гараар нээгддэг, угаалгын машинд хийж болно.", images: [img("gym-bottle1")] },
+      { name: "Jogger өмд", price: 75000, category: "Эрэгтэй", description: "Тав тухтай slim-fit jogger өмд. Зөөлөн French Terry материал, шагайн манжеттай, халаастай.", images: [img("gym-jogger1")] },
+      { name: "Vital леггинг", price: 59000, category: "Эмэгтэй", description: "Scrunch загварын леггинг. Өндөр бүсэлхий, биеийн галбирыг онцолсон загвар. 4-талт уян материал.", images: [img("gym-vital1")] },
+      { name: "Толгойн оосор", price: 12000, category: "Аксессуар", description: "Хөлрөлт шингээдэг спорт толгойн оосор. Уян хатан, аль ч толгойн хэмжээнд тохирно.", images: [img("gym-headband")] },
     ],
   },
 ];
 
-// Жагсаалтад content/demoProducts-г бүхэлд нь явуулахгүй — товч мэдээлэл
 function listTemplates() {
-  return TEMPLATES.map(({ id, name, description, category, theme }) => ({ id, name, description, category, theme }));
+  return TEMPLATES.map(({ id, name, description, category, theme, preview }) => ({ id, name, description, category, theme, preview }));
 }
 
 function getTemplate(id) {
