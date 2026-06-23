@@ -504,6 +504,14 @@ router.post("/settings/builder", async (req, res) => {
     const OpenAI = require("openai");
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+    // Бизнесийн чиглэлийг keyword-аар серверт detect хийнэ (AI-д найдахгүй)
+    const allText = [message, ...history.filter((h) => h.role === "user").map((h) => h.content)].join(" ").toLowerCase();
+    let serverDetectedType = null;
+    if (/эмнэлэг|клиник|emneleg|klinik|clinic|шүд|shud|эмч|emch|hospital/.test(allText)) serverDetectedType = "clinic";
+    else if (/салон|salon|гоо сайх|goo saih|beauty|үсчин|uschin|усчин|стилист|stylist|маникюр|manicur/.test(allText)) serverDetectedType = "salon";
+    else if (/ресторан|restoran|restaurant|кафе|cafe|хоолны|hoolni|зоогийн|zoogiin|тогооч|togooch|пицц|pizz/.test(allText)) serverDetectedType = "restaurant";
+    else if (/дэлгүүр|delguur|shop|store|худалд|hudald|бараа|baraa|онлайн.*дэлгүүр|online.*shop/.test(allText)) serverDetectedType = "shop";
+
     // Одоо байгаа KB-г ачаалж Builder-д мэдүүлнэ
     const existingKB = await prisma.turuuKnowledge.findMany({
       where: { orgId, active: true },
@@ -698,6 +706,7 @@ ${INIT_BLOCK}
 
 ⚠️ "А. ЕРӨНХИЙ" бол ХАМГИЙН СҮҮЛИЙН сонголт — зөвхөн эмнэлэг, гоо сайхны утга огт илрээгүй үед л ашиглана.
 
+${serverDetectedType ? `\n🚨 СЕРВЕРЭЭС ТОДОРХОЙЛСОН БИЗНЕСИЙН ЧИГЛЭЛ: "${serverDetectedType === "clinic" ? "Б. ЭМНЭЛЭГ / КЛИНИК" : serverDetectedType === "salon" ? "В. САЛОН / ГОО САЙХАН" : serverDetectedType === "restaurant" ? "Г. РЕСТОРАН / ХООЛНЫ ГАЗАР" : "А. ЕРӨНХИЙ"}" — ЭНЭ БАГЦЫГ ЗААВАЛ АШИГЛА, дүрмийн 2-р алхамыг алгасаж шууд 1️⃣ асуултаас эхэл.\n` : ""}
 3. Сонгосон багцаа 1-7 асуултын турш ТОГТВОРТОЙ ашигла — дунд нь бүү сольж.
 ⚠️ Компанийн нэр, чиглэл аль хэдийн мэдэгдсэн тул сонгосон багцад ДАХИН "КОМПАНИ" асуулт асуухгүй — нийт ЗӨВХӨН 7 асуулт асууна.
 
