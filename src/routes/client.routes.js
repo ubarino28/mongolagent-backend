@@ -1332,7 +1332,21 @@ router.get("/analytics", async (req, res) => {
         GROUP BY DATE("createdAt") ORDER BY date ASC`,
     ]);
 
-    res.json({ totalConversations, totalLeads, totalConsultations, totalOrders, newLeads, dailyMessages, dailyLeads });
+    // Орлогын тооцоолол
+    const [orderRevenue, appointmentRevenue, storeRevenue] = await Promise.all([
+      prisma.turuuOrder.aggregate({ where: { orgId, status: "PAID" }, _sum: { totalAmount: true } }),
+      prisma.turuuAppointment.aggregate({ where: { orgId, depositStatus: "PAID" }, _sum: { depositAmount: true } }),
+      prisma.$queryRaw`SELECT COALESCE(SUM("totalAmount"), 0)::float as total FROM "StoreOrder" WHERE "orgId" = ${orgId} AND "status" = 'PAID'`.catch(() => [{ total: 0 }]),
+    ]);
+
+    const revenue = {
+      orders: orderRevenue._sum.totalAmount || 0,
+      appointments: appointmentRevenue._sum.depositAmount || 0,
+      store: Array.isArray(storeRevenue) ? (storeRevenue[0]?.total || 0) : 0,
+      total: (orderRevenue._sum.totalAmount || 0) + (appointmentRevenue._sum.depositAmount || 0) + (Array.isArray(storeRevenue) ? (storeRevenue[0]?.total || 0) : 0),
+    };
+
+    res.json({ totalConversations, totalLeads, totalConsultations, totalOrders, newLeads, dailyMessages, dailyLeads, revenue });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
