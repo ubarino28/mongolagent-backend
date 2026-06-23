@@ -10,22 +10,25 @@ const PORT = process.env.PORT || 3001;
 async function autoCompleteReservations() {
   try {
     const prisma = getPrisma();
-    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    const now = new Date();
+
+    // Ширээ захиалга: цагаас 2 цагийн дараа COMPLETED (зочид ирж суугаад явсан)
+    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
     const result = await prisma.$executeRawUnsafe(`
       UPDATE "TuruuReservation"
       SET "status" = 'COMPLETED', "updatedAt" = NOW()
       WHERE "status" = 'CONFIRMED'
         AND ("date" || ' ' || "timeSlot")::timestamp < $1
-    `, sixHoursAgo);
+    `, twoHoursAgo);
     if (result > 0) console.log(`[auto-complete] ${result} reservations → COMPLETED`);
 
-    // TuruuAppointment-д ч ижилээр
+    // Цаг захиалга: duration + 5 минутын дараа COMPLETED
     const result2 = await prisma.$executeRawUnsafe(`
       UPDATE "TuruuAppointment"
       SET "status" = 'COMPLETED', "updatedAt" = NOW()
       WHERE "status" = 'CONFIRMED'
-        AND ("date" || ' ' || "timeSlot")::timestamp < $1
-    `, sixHoursAgo);
+        AND (("date" || ' ' || "timeSlot")::timestamp + ("durationMinutes" + 5) * INTERVAL '1 minute') < $1
+    `, now);
     if (result2 > 0) console.log(`[auto-complete] ${result2} appointments → COMPLETED`);
   } catch (e) {
     console.error("[auto-complete]", e.message);
