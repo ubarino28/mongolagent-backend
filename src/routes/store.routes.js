@@ -762,11 +762,17 @@ const WEB_PLAN_PRICE = 99000; // ₮/сар
 router.get("/subscription", async (req, res) => {
   try {
     const prisma = getPrisma();
-    const store = await prisma.store.findUnique({
+    let store = await prisma.store.findUnique({
       where: { orgId: req.org.orgId },
-      select: { webPlan: true, trialEndsAt: true, webExpiresAt: true, slug: true, status: true },
+      select: { id: true, webPlan: true, trialEndsAt: true, webExpiresAt: true, slug: true, status: true, createdAt: true },
     });
     if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    if (store.webPlan === "trial" && !store.trialEndsAt) {
+      const trialEndsAt = new Date(store.createdAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+      await prisma.store.update({ where: { id: store.id }, data: { trialEndsAt } });
+      store = { ...store, trialEndsAt };
+    }
 
     let wallet = await prisma.webWallet.findUnique({ where: { orgId: req.org.orgId } });
     if (!wallet) wallet = await prisma.webWallet.create({ data: { orgId: req.org.orgId } });
