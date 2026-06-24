@@ -328,4 +328,37 @@ router.post("/web-wallet/:orgId", async (req, res) => {
   });
 });
 
+// Domain purchase QPay callback — POST /webhook/domain-qpay/:orgId
+// createDomainInvoice нь энэ URL-ийг callback болгож өгдөг. Өмнө энэ route байхгүй
+// байсан тул tab хаагдвал төлбөр авагдсан ч домэйн БҮРТГЭГДДЭГГҮЙ байв.
+// Одоо webhook домэйнг сервер талд ИДЕМПОТЕНТоор бүртгэнэ (polling-той зөрчилгүй).
+router.post("/domain-qpay/:orgId", async (req, res) => {
+  res.json({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      const prisma = getPrisma();
+      const subQpay = require("../services/subscription-qpay.service");
+      const vdomains = require("../services/vercelDomains.service");
+      const vercel = require("../services/vercel.service");
+      const { fulfillDomainOrder } = require("../services/domain.service");
+
+      // Callback зөвхөн orgId өгдөг тул бүх pending домэйн захиалгыг ӨӨР ӨӨРИЙН invoice-оор шалгана
+      const orders = await prisma.domainOrder.findMany({
+        where: { orgId: req.params.orgId, status: "pending" },
+      });
+      for (const order of orders) {
+        if (!order.qpayInvoiceId) continue;
+        const result = await subQpay.checkPayment(order.qpayInvoiceId);
+        const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID" || result.invoice_status === "PAID";
+        if (!paid) continue;
+        const r = await fulfillDomainOrder(prisma, { vdomains, vercel }, order);
+        console.log(`[Domain] Org ${req.params.orgId} domain ${order.domain} → ${r.status}`);
+      }
+    } catch (err) {
+      console.error("[Domain callback]", err.message);
+    }
+  });
+});
+
 module.exports = router;

@@ -8,6 +8,7 @@ const { listTemplates, getTemplate } = require("../lib/storeTemplates");
 const vercel = require("../services/vercel.service");
 const vdomains = require("../services/vercelDomains.service");
 const platformQpay = require("../services/subscription-qpay.service");
+const { fulfillDomainOrder } = require("../services/domain.service");
 
 const router = express.Router();
 
@@ -693,20 +694,12 @@ router.get("/domain/purchase/:id/status", async (req, res) => {
     const pay = await platformQpay.checkPayment(order.qpayInvoiceId);
     if (pay.invoice_status !== "PAID") return res.json({ status: "pending" });
 
-    // Төлсөн — нэг л удаа худалдаж авна
+    // Төлсөн — ИДЕМПОТЕНТ биелүүлэлт (polling + webhook давхар ажиллавал ч нэг л удаа авна)
     if (order.status === "pending") {
-      await prisma.domainOrder.update({ where: { id: order.id }, data: { qpayStatus: "PAID", status: "paid" } });
-      try {
-        const bought = await vdomains.buy(order.domain, { expectedPrice: order.priceUsd, years: 1, renew: true });
-        await vercel.addCustomDomain(order.domain).catch(() => {});
-        await prisma.store.update({ where: { id: store.id }, data: { customDomain: order.domain } });
-        await prisma.domainOrder.update({ where: { id: order.id }, data: { status: "registered", vercelOrderId: bought.orderId || bought.id || null } });
-        return res.json({ status: "registered", domain: order.domain });
-      } catch (e) {
-        const msg = e.response?.data?.error?.message || e.message;
-        await prisma.domainOrder.update({ where: { id: order.id }, data: { status: "failed", errorMsg: msg } });
-        return res.json({ status: "failed", error: "Домэйн бүртгэхэд алдаа гарлаа. Бидэнтэй холбогдоно уу." });
-      }
+      const r = await fulfillDomainOrder(prisma, { vdomains, vercel }, order);
+      if (r.status === "registered") return res.json({ status: "registered", domain: order.domain });
+      if (r.status === "failed") return res.json({ status: "failed", error: "Домэйн бүртгэхэд алдаа гарлаа. Бидэнтэй холбогдоно уу." });
+      return res.json({ status: r.status || "paid" });
     }
     res.json({ status: order.status });
   } catch (e) { res.status(500).json({ error: e.message }); }
