@@ -1332,18 +1332,36 @@ router.get("/analytics", async (req, res) => {
         GROUP BY DATE("createdAt") ORDER BY date ASC`,
     ]);
 
-    // Орлогын тооцоолол
-    const [orderRevenue, appointmentRevenue, storeRevenue] = await Promise.all([
-      prisma.turuuOrder.aggregate({ where: { orgId, status: "PAID" }, _sum: { totalAmount: true } }),
-      prisma.turuuAppointment.aggregate({ where: { orgId, depositStatus: "PAID" }, _sum: { depositAmount: true } }),
-      prisma.$queryRaw`SELECT COALESCE(SUM("totalAmount"), 0)::float as total FROM "StoreOrder" WHERE "orgId" = ${orgId} AND "status" = 'PAID'`.catch(() => [{ total: 0 }]),
+    // Орлогын тооцоолол — хугацаагаар (today / 7d / 30d / all)
+    const period = req.query.period || "all";
+    const periodFilter = period === "today" ? { gte: new Date(new Date().setHours(0,0,0,0)) }
+      : period === "7d" ? { gte: new Date(Date.now() - 7 * 86400000) }
+      : period === "30d" ? { gte: new Date(Date.now() - 30 * 86400000) }
+      : undefined;
+    const dateWhere = periodFilter ? { createdAt: periodFilter } : {};
+
+    const [orderRevenue, appointmentRevenue, storeRevenue, dailyRevenue] = await Promise.all([
+      prisma.turuuOrder.aggregate({ where: { orgId, status: "PAID", ...dateWhere }, _sum: { totalAmount: true }, _count: true }),
+      prisma.turuuAppointment.aggregate({ where: { orgId, depositStatus: "PAID", ...dateWhere }, _sum: { depositAmount: true }, _count: true }),
+      prisma.$queryRaw`SELECT COALESCE(SUM("totalAmount"), 0)::float as total, COUNT(*)::int as cnt FROM "StoreOrder" WHERE "orgId" = ${orgId} AND "status" = 'PAID' ${periodFilter ? prisma.$queryRaw` AND "createdAt" >= ${periodFilter.gte}` : prisma.$queryRaw``}`.catch(() => [{ total: 0, cnt: 0 }]),
+      prisma.$queryRaw`
+        SELECT d.date, COALESCE(SUM(d.amount), 0)::float as amount FROM (
+          SELECT DATE("createdAt") as date, "totalAmount" as amount FROM "TuruuOrder" WHERE "orgId" = ${orgId} AND "status" = 'PAID' AND "createdAt" >= NOW() - INTERVAL '30 days'
+          UNION ALL
+          SELECT DATE("createdAt") as date, "depositAmount" as amount FROM "TuruuAppointment" WHERE "orgId" = ${orgId} AND "depositStatus" = 'PAID' AND "createdAt" >= NOW() - INTERVAL '30 days'
+        ) d GROUP BY d.date ORDER BY d.date ASC`,
     ]);
 
     const revenue = {
       orders: orderRevenue._sum.totalAmount || 0,
+      ordersCount: orderRevenue._count || 0,
       appointments: appointmentRevenue._sum.depositAmount || 0,
+      appointmentsCount: appointmentRevenue._count || 0,
       store: Array.isArray(storeRevenue) ? (storeRevenue[0]?.total || 0) : 0,
+      storeCount: Array.isArray(storeRevenue) ? (storeRevenue[0]?.cnt || 0) : 0,
       total: (orderRevenue._sum.totalAmount || 0) + (appointmentRevenue._sum.depositAmount || 0) + (Array.isArray(storeRevenue) ? (storeRevenue[0]?.total || 0) : 0),
+      daily: dailyRevenue || [],
+      period,
     };
 
     res.json({ totalConversations, totalLeads, totalConsultations, totalOrders, newLeads, dailyMessages, dailyLeads, revenue });
