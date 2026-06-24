@@ -2,6 +2,7 @@
 require("dotenv").config();
 const app = require("./app");
 const { startDomainHealthLoop } = require("./services/domainHealth.service");
+const { startReconciliation } = require("./services/reconcile.service");
 const { getPrisma } = require("./lib/db");
 
 const PORT = process.env.PORT || 3001;
@@ -58,4 +59,6 @@ app.listen(PORT, () => {
   // 30 минут тутамд auto-complete шалгана
   setInterval(autoCompleteReservations, 30 * 60 * 1000);
   autoCompleteReservations();
+  // 5 минут тутамд төлбөрийн reconciliation (webhook алдвал барьж авах нөөц)
+  startReconciliation(getPrisma());
 });
