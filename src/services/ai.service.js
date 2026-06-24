@@ -729,7 +729,7 @@ async function processReceiptImage(psid, imageUrl, orgId = null) {
   const prisma = getPrisma();
 
   const order = await prisma.turuuOrder.findFirst({
-    where: { psid, orgId, status: { not: "PAID" } },
+    where: { psid, orgId, status: { notIn: ["PAID", "CANCELLED", "DONE"] } },
     orderBy: { createdAt: "desc" },
   });
 

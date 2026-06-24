@@ -1427,7 +1427,16 @@ router.post("/orders/:id/confirm-payment", async (req, res) => {
     const prisma = getPrisma();
     const order = await prisma.turuuOrder.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
     if (!order) return res.status(404).json({ error: "Not found" });
-    await prisma.turuuOrder.update({ where: { id: order.id }, data: { status: "PAID", qpayStatus: "PAID" } });
+    const updateData = { status: "PAID" };
+    // QPay invoice байвал цуцлах — давхар төлбөр хийгдэхээс сэргийлнэ
+    if (order.qpayInvoiceId && order.qpayStatus !== "PAID") {
+      updateData.qpayStatus = "CANCELLED";
+      try {
+        const qpay = require("../services/qpay.service");
+        await qpay.cancelInvoice(order.qpayInvoiceId);
+      } catch { /* QPay цуцлалт амжилтгүй бол DB-д CANCELLED тэмдэглэнэ, webhook-д шалгагдана */ }
+    }
+    await prisma.turuuOrder.update({ where: { id: order.id }, data: updateData });
     // Messenger-ээр хэрэглэгчид мэдэгдэл
     if (order.psid) {
       try {
@@ -2335,6 +2344,17 @@ router.post("/orders/:id/check-payment", async (req, res) => {
         where: { id: order.id },
         data: { qpayStatus: "PAID", status: "PAID" },
       });
+      // Messenger мэдэгдэл (callback алдагдсан тохиолдолд)
+      if (order.psid) {
+        try {
+          const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { fbPageToken: true } });
+          const token = org?.fbPageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+          if (token) {
+            const orderCode = order.id.slice(-6).toUpperCase();
+            await sendText(order.psid, `✅ Таны төлбөр амжилттай хийгдлээ! Захиалга #${orderCode} батлагдлаа 🙏`, token).catch(() => {});
+          }
+        } catch { /* non-blocking */ }
+      }
     }
 
     res.json({ paid, qpayStatus: paid ? "PAID" : "PENDING", result });

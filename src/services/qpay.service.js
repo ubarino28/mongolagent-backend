@@ -145,6 +145,13 @@ async function getInvoice(invoiceId) {
   );
 }
 
+// Invoice цуцлах (дансаар төлсөн үед QPay invoice хүчингүй болгох)
+async function cancelInvoice(invoiceId) {
+  return _withRetry((token) =>
+    axios.delete(`${BASE_URL}/v2/invoice/${invoiceId}`, { headers: _authHeaders(token) }).then((r) => r.data)
+  );
+}
+
 // ─── Payment ─────────────────────────────────────────────────────────────────
 
 // Төлбөр хийгдсэн эсэх шалгах
@@ -205,6 +212,7 @@ module.exports = {
   getDistricts,
   createInvoice,
   getInvoice,
+  cancelInvoice,
   checkPayment,
   buildPaymentMessage,
   BANK_CODES,

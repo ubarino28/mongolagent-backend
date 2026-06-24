@@ -96,7 +96,7 @@ router.post("/qpay/:orderId", async (req, res) => {
     try {
       const prisma = getPrisma();
       const order = await prisma.turuuOrder.findUnique({ where: { id: req.params.orderId } });
-      if (!order?.qpayInvoiceId || order.qpayStatus === "PAID") return;
+      if (!order?.qpayInvoiceId || order.qpayStatus === "PAID" || order.qpayStatus === "CANCELLED" || order.status === "PAID") return;
 
       const result = await checkPayment(order.qpayInvoiceId);
       const paid = result.invoice_status === "PAID";
