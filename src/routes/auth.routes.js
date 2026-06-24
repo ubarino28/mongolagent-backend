@@ -17,7 +17,16 @@ const FROM_EMAIL = process.env.FROM_EMAIL || "noreply@mongolagent.mn";
 
 function signToken(org) {
   return jwt.sign(
-    { orgId: org.id, slug: org.slug, name: org.name, plan: org.plan },
+    { orgId: org.id, slug: org.slug, name: org.name, plan: org.plan, role: "owner" },
+    jwtSecret(),
+    { expiresIn: "30d" }
+  );
+}
+
+// Ажилтны токен — org-ийн дотор role-той (staff | viewer)
+function signStaffToken(staff, org) {
+  return jwt.sign(
+    { orgId: org.id, slug: org.slug, name: staff.name, plan: org.plan, role: staff.role, staffId: staff.id },
     jwtSecret(),
     { expiresIn: "30d" }
   );
@@ -59,14 +68,23 @@ router.post("/login", authLimiter, async (req, res) => {
 
     const prisma = getPrisma();
     const org = await prisma.organization.findUnique({ where: { email } });
-    if (!org) return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" });
-    if (org.status !== "active") return res.status(403).json({ error: "Бүртгэл идэвхгүй байна" });
+    if (org) {
+      if (org.status !== "active") return res.status(403).json({ error: "Бүртгэл идэвхгүй байна" });
+      const valid = await bcrypt.compare(password, org.passwordHash);
+      if (!valid) return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" });
+      const token = signToken(org);
+      return res.json({ token, org: { id: org.id, name: org.name, slug: org.slug, email: org.email, plan: org.plan, fbPageId: org.fbPageId, role: "owner" } });
+    }
 
-    const valid = await bcrypt.compare(password, org.passwordHash);
-    if (!valid) return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" });
-
-    const token = signToken(org);
-    res.json({ token, org: { id: org.id, name: org.name, slug: org.slug, email: org.email, plan: org.plan, fbPageId: org.fbPageId } });
+    // Org биш бол — ажилтны нэвтрэлт (additive, org урсгалыг хөндөхгүй)
+    const staff = await prisma.staffMember.findUnique({ where: { email } });
+    if (!staff || staff.status !== "active") return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" });
+    const sValid = await bcrypt.compare(password, staff.passwordHash);
+    if (!sValid) return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" });
+    const parentOrg = await prisma.organization.findUnique({ where: { id: staff.orgId } });
+    if (!parentOrg || parentOrg.status !== "active") return res.status(403).json({ error: "Бүртгэл идэвхгүй байна" });
+    const token = signStaffToken(staff, parentOrg);
+    res.json({ token, org: { id: parentOrg.id, name: staff.name, slug: parentOrg.slug, email: staff.email, plan: parentOrg.plan, role: staff.role, staffId: staff.id } });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -174,7 +192,9 @@ router.get("/me", async (req, res) => {
     const org = await prisma.organization.findUnique({ where: { id: payload.orgId } });
     if (!org) return res.status(404).json({ error: "Not found" });
 
-    res.json({ id: org.id, name: org.name, slug: org.slug, email: org.email, plan: org.plan, fbPageId: org.fbPageId, status: org.status });
+    const role = payload.role || "owner";
+    // Ажилтан бол түүний нэр/имэйлийг харуулна
+    res.json({ id: org.id, name: payload.name || org.name, slug: org.slug, email: org.email, plan: org.plan, fbPageId: org.fbPageId, status: org.status, role });
   } catch {
     res.status(401).json({ error: "Invalid token" });
   }

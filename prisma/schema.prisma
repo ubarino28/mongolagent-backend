@@ -36,6 +36,35 @@ model Organization {
 
   orders TuruuOrder[]
   store  Store?
+  staff  StaffMember[]
+}
+
+model StaffMember {
+  id           String       @id @default(uuid())
+  orgId        String
+  org          Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name         String
+  email        String       @unique
+  passwordHash String
+  role         String       @default("staff") // staff | viewer
+  status       String       @default("active") // active | disabled
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([orgId])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  orgId     String
+  actor     String?  // нэр эсвэл имэйл
+  role      String?  // owner | staff | viewer
+  action    String   // "order.status", "order.refund", "product.delete" г.м
+  target    String?  // ID эсвэл нэр
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([orgId, createdAt])
 }
 
 model PasswordResetToken {

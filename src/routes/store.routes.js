@@ -9,8 +9,16 @@ const vercel = require("../services/vercel.service");
 const vdomains = require("../services/vercelDomains.service");
 const platformQpay = require("../services/subscription-qpay.service");
 const { fulfillDomainOrder } = require("../services/domain.service");
+const { logAudit } = require("../services/audit.service");
+const bcrypt = require("bcryptjs");
 
 const router = express.Router();
+
+// Зөвхөн эзэмшигч (owner) — ажилтны удирдлага, тооцоо зэрэгт
+function requireOwner(req, res, next) {
+  if ((req.org.role || "owner") !== "owner") return res.status(403).json({ error: "Зөвхөн дэлгүүрийн эзэмшигчид зөвшөөрөгдөнө" });
+  next();
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -52,6 +60,14 @@ async function uniqueStoreSlug(prisma, base, excludeStoreId) {
 
 // Бүх route auth шаардана
 router.use(clientAuthMiddleware);
+
+// "viewer" эрхтэй ажилтан зөвхөн ХАРАХ (GET) боломжтой — бусад үйлдлийг блоклоно
+router.use((req, res, next) => {
+  if (req.method !== "GET" && (req.org.role || "owner") === "viewer") {
+    return res.status(403).json({ error: "Танд зөвхөн харах эрх байна" });
+  }
+  next();
+});
 
 // ─── Templates ────────────────────────────────────────────────────────────────
 
@@ -513,6 +529,7 @@ router.patch("/orders/:id", async (req, res) => {
     if (Object.keys(data).length === 0) return res.json({ order });
 
     const updated = await prisma.storeOrder.update({ where: { id: order.id }, data });
+    await logAudit(prisma, req, "order.update", order.id, data);
     res.json({ order: updated });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -540,6 +557,7 @@ router.post("/orders/:id/refund", async (req, res) => {
         status: full ? "REFUNDED" : order.status,
       },
     });
+    await logAudit(prisma, req, "order.refund", order.id, { amount: amt, full });
     res.json({ order: updated });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -583,6 +601,82 @@ router.delete("/reviews/:id", async (req, res) => {
     if (!review) return res.status(404).json({ error: "Сэтгэгдэл олдсонгүй" });
     await prisma.review.delete({ where: { id: review.id } });
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Staff (ажилтны эрх) — зөвхөн owner ──────────────────────────────────────
+
+router.get("/staff", requireOwner, async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const staff = await prisma.staffMember.findMany({
+      where: { orgId: req.org.orgId },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true, email: true, role: true, status: true, createdAt: true },
+    });
+    res.json({ staff });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post("/staff", requireOwner, async (req, res) => {
+  try {
+    const { name, email, password, role } = req.body || {};
+    if (!name || !email || !password) return res.status(400).json({ error: "Нэр, имэйл, нууц үг шаардлагатай" });
+    if (String(password).length < 6) return res.status(400).json({ error: "Нууц үг хамгийн багадаа 6 тэмдэгт" });
+    const r = role === "viewer" ? "viewer" : "staff";
+    const prisma = getPrisma();
+    // Имэйл org эсвэл өөр staff-д бүртгэлтэй эсэхийг шалгана
+    const lowEmail = String(email).toLowerCase().trim();
+    const dupOrg = await prisma.organization.findUnique({ where: { email: lowEmail }, select: { id: true } });
+    const dupStaff = await prisma.staffMember.findUnique({ where: { email: lowEmail }, select: { id: true } });
+    if (dupOrg || dupStaff) return res.status(409).json({ error: "Энэ имэйл аль хэдийн бүртгэлтэй байна" });
+    const passwordHash = await bcrypt.hash(String(password), 10);
+    const created = await prisma.staffMember.create({
+      data: { orgId: req.org.orgId, name: String(name).slice(0, 80), email: lowEmail, passwordHash, role: r },
+      select: { id: true, name: true, email: true, role: true, status: true, createdAt: true },
+    });
+    await logAudit(prisma, req, "staff.create", created.email, { role: r });
+    res.json({ staff: created });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.patch("/staff/:id", requireOwner, async (req, res) => {
+  try {
+    const { role, status, password } = req.body || {};
+    const prisma = getPrisma();
+    const member = await prisma.staffMember.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!member) return res.status(404).json({ error: "Ажилтан олдсонгүй" });
+    const data = {};
+    if (role !== undefined) data.role = role === "viewer" ? "viewer" : "staff";
+    if (status !== undefined) data.status = status === "disabled" ? "disabled" : "active";
+    if (password) { if (String(password).length < 6) return res.status(400).json({ error: "Нууц үг богино байна" }); data.passwordHash = await bcrypt.hash(String(password), 10); }
+    const updated = await prisma.staffMember.update({ where: { id: member.id }, data, select: { id: true, name: true, email: true, role: true, status: true, createdAt: true } });
+    await logAudit(prisma, req, "staff.update", member.email, data.passwordHash ? { reset: true } : { role: data.role, status: data.status });
+    res.json({ staff: updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete("/staff/:id", requireOwner, async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const member = await prisma.staffMember.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!member) return res.status(404).json({ error: "Ажилтан олдсонгүй" });
+    await prisma.staffMember.delete({ where: { id: member.id } });
+    await logAudit(prisma, req, "staff.delete", member.email);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Audit log — зөвхөн owner ────────────────────────────────────────────────
+router.get("/audit", requireOwner, async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const logs = await prisma.auditLog.findMany({
+      where: { orgId: req.org.orgId },
+      orderBy: { createdAt: "desc" },
+      take: 300,
+    });
+    res.json({ logs });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
