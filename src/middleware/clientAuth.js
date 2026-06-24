@@ -1,5 +1,6 @@
 "use strict";
 const jwt = require("jsonwebtoken");
+const { jwtSecret } = require("../lib/jwtSecret");
 
 function clientAuthMiddleware(req, res, next) {
   const auth = req.headers.authorization;
@@ -7,7 +8,7 @@ function clientAuthMiddleware(req, res, next) {
 
   const token = auth.slice(7);
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET || "mongolagent_admin_secret_change_me");
+    const payload = jwt.verify(token, jwtSecret());
     if (!payload.orgId) return res.status(401).json({ error: "Invalid token" });
     req.org = payload;
     next();

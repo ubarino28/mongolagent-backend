@@ -5,6 +5,9 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const { Resend } = require("resend");
 const { getPrisma } = require("../lib/db");
+const { jwtSecret } = require("../lib/jwtSecret");
+const { rateLimit } = require("../middleware/rateLimit");
+const authLimiter = rateLimit({ windowMs: 60_000, max: 10 }); // 1 минутад 10 оролдлого
 
 const router = express.Router();
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -15,13 +18,13 @@ const FROM_EMAIL = process.env.FROM_EMAIL || "noreply@mongolagent.mn";
 function signToken(org) {
   return jwt.sign(
     { orgId: org.id, slug: org.slug, name: org.name, plan: org.plan },
-    process.env.JWT_SECRET || "mongolagent_admin_secret_change_me",
+    jwtSecret(),
     { expiresIn: "30d" }
   );
 }
 
 // POST /auth/register
-router.post("/register", async (req, res) => {
+router.post("/register", authLimiter, async (req, res) => {
   try {
     const { name, email, password } = req.body;
     if (!name || !email || !password) return res.status(400).json({ error: "name, email, password шаардлагатай" });
@@ -49,7 +52,7 @@ router.post("/register", async (req, res) => {
 });
 
 // POST /auth/login
-router.post("/login", async (req, res) => {
+router.post("/login", authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: "email, password шаардлагатай" });
@@ -70,7 +73,7 @@ router.post("/login", async (req, res) => {
 });
 
 // POST /auth/forgot-password
-router.post("/forgot-password", async (req, res) => {
+router.post("/forgot-password", authLimiter, async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: "Имэйл шаардлагатай" });
@@ -127,7 +130,7 @@ router.post("/forgot-password", async (req, res) => {
 });
 
 // POST /auth/reset-password
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", authLimiter, async (req, res) => {
   try {
     const { token, password } = req.body;
     if (!token || !password) return res.status(400).json({ error: "token, password шаардлагатай" });
@@ -164,7 +167,7 @@ router.get("/me", async (req, res) => {
     const auth = req.headers.authorization;
     if (!auth?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
     const token = auth.slice(7);
-    const payload = jwt.verify(token, process.env.JWT_SECRET || "mongolagent_admin_secret_change_me");
+    const payload = jwt.verify(token, jwtSecret());
     if (!payload.orgId) return res.status(401).json({ error: "Invalid" });
 
     const prisma = getPrisma();

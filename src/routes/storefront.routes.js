@@ -3,6 +3,9 @@ const express = require("express");
 const { getPrisma } = require("../lib/db");
 const qpay = require("../services/qpay.service");
 const { decrementStockForOrder } = require("../services/stock.service");
+const { markStoreOrderPaid } = require("../services/payment.service");
+const { rateLimit } = require("../middleware/rateLimit");
+const checkoutLimiter = rateLimit({ windowMs: 60_000, max: 12 }); // checkout/discount spam-аас
 
 const router = express.Router();
 
@@ -132,7 +135,7 @@ router.get("/:slug/product/:id", async (req, res) => {
 
 // POST /storefront/:slug/validate-discount — сагсан дээр купон шалгах
 // body: { code, subtotal }
-router.post("/:slug/validate-discount", async (req, res) => {
+router.post("/:slug/validate-discount", checkoutLimiter, async (req, res) => {
   try {
     const prisma = getPrisma();
     const store = await prisma.store.findUnique({ where: { slug: String(req.params.slug).toLowerCase() }, select: { id: true, status: true } });
@@ -145,7 +148,7 @@ router.post("/:slug/validate-discount", async (req, res) => {
 
 // POST /storefront/:slug/checkout
 // body: { items: [{ productId, qty }], customer: { name, phone, email, address }, note, discountCode }
-router.post("/:slug/checkout", async (req, res) => {
+router.post("/:slug/checkout", checkoutLimiter, async (req, res) => {
   try {
     const { items, customer = {}, note, discountCode, deliveryMethod } = req.body;
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: "Сагс хоосон байна" });
@@ -214,10 +217,8 @@ router.post("/:slug/checkout", async (req, res) => {
       },
     });
 
-    // Купоны ашиглалтын тоог нэмэгдүүлэх
-    if (appliedDiscount) {
-      await prisma.discount.update({ where: { id: appliedDiscount.id }, data: { usedCount: { increment: 1 } } }).catch(() => {});
-    }
+    // Купоны ашиглалт нь ТӨЛБӨР ТӨЛӨГДСӨНИЙ ДАРАА л тоологдоно (markStoreOrderPaid дотор).
+    // → төлөөгүй/орхигдсон захиалга купоны лимитийг иддэггүй.
 
     // QPay invoice — org-ийн merchant/банкны мэдээлэл байвал
     const org = await prisma.organization.findUnique({ where: { id: store.orgId } });
@@ -291,8 +292,7 @@ router.get("/order/:id/status", async (req, res) => {
     const result = await qpay.checkPayment(order.qpayInvoiceId);
     const paid = result.invoice_status === "PAID";
     if (paid) {
-      await prisma.storeOrder.update({ where: { id: order.id }, data: { qpayStatus: "PAID", status: "PAID" } });
-      await decrementStockForOrder(prisma, order).catch(() => {});
+      await markStoreOrderPaid(prisma, order); // идемпотент — давхар хасахгүй
       return res.json({ status: "PAID", orderStatus: "PAID" });
     }
     res.json({ status: "PENDING", orderStatus: order.status });

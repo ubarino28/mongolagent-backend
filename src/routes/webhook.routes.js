@@ -162,16 +162,10 @@ router.post("/qpay-store/:orderId", async (req, res) => {
       const result = await checkPayment(order.qpayInvoiceId);
       if (result.invoice_status !== "PAID") return;
 
-      await prisma.storeOrder.update({
-        where: { id: order.id },
-        data: { qpayStatus: "PAID", status: "PAID" },
-      });
-
-      // Барааны нөөцийг хасах
-      try {
-        const { decrementStockForOrder } = require("../services/stock.service");
-        await decrementStockForOrder(prisma, order);
-      } catch { /* non-blocking */ }
+      // Идемпотент — нөөц/купон зөвхөн нэг удаа. Аль хэдийн боловсруулсан бол давхар мэдэгдэхгүй.
+      const { markStoreOrderPaid } = require("../services/payment.service");
+      const newlyPaid = await markStoreOrderPaid(prisma, order);
+      if (!newlyPaid) return;
 
       // Telegram мэдэгдэл
       try {
@@ -268,7 +262,7 @@ router.post("/sub-qpay/:orgId", async (req, res) => {
       const prisma = getPrisma();
       const org = await prisma.organization.findUnique({
         where: { id: req.params.orgId },
-        select: { id: true, subInvoiceId: true, subQpayStatus: true, name: true, telegramBotToken: true, telegramChatId: true },
+        select: { id: true, subInvoiceId: true, subQpayStatus: true, subscriptionEndsAt: true, name: true, telegramBotToken: true, telegramChatId: true },
       });
       if (!org?.subInvoiceId || org.subQpayStatus === "PAID") return;
 
@@ -277,9 +271,11 @@ router.post("/sub-qpay/:orgId", async (req, res) => {
       const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
       if (!paid) return;
 
-      // Subscription 1 сараар сунгана
+      // Subscription 30 хоногоор сунгана — ҮЛДСЭН хугацаан дээр нэмж стэклэнэ (эрт төлвөл хохирохгүй),
+      // сарын төгсгөлийн (1-р сарын 31 → 3-р сар) үсрэлтийн алдааг 30-хоногийн нэмэлтээр арилгана.
       const now = new Date();
-      const subscriptionEndsAt = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
+      const base = org.subscriptionEndsAt && new Date(org.subscriptionEndsAt) > now ? new Date(org.subscriptionEndsAt) : now;
+      const subscriptionEndsAt = new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000);
 
       await prisma.organization.update({
         where: { id: org.id },
@@ -311,25 +307,21 @@ router.post("/web-wallet/:orgId", async (req, res) => {
   setImmediate(async () => {
     try {
       const prisma = getPrisma();
-      const tx = await prisma.webWalletTx.findFirst({
-        where: { orgId: req.params.orgId, qpayStatus: "PENDING", type: "topup" },
-        orderBy: { createdAt: "desc" },
-      });
-      if (!tx) return;
-
+      // Callback зөвхөн orgId өгдөг тул бүх PENDING топапыг ӨӨР ӨӨРИЙН invoice-оор шалгана.
+      // → буруу tx-д буруу дүн орохоос сэргийлнэ (өмнө "хамгийн сүүлийн pending"-ийг авдаг байсан).
       const subQpay = require("../services/subscription-qpay.service");
-      const result = await subQpay.checkPayment(tx.qpayInvoiceId);
-      const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
-      if (!paid) return;
-
-      await prisma.webWalletTx.update({ where: { id: tx.id }, data: { qpayStatus: "PAID" } });
-      await prisma.webWallet.upsert({
-        where: { orgId: req.params.orgId },
-        create: { orgId: req.params.orgId, balance: tx.amount },
-        update: { balance: { increment: tx.amount } },
+      const { applyWalletTopup } = require("../services/payment.service");
+      const txs = await prisma.webWalletTx.findMany({
+        where: { orgId: req.params.orgId, qpayStatus: "PENDING", type: "topup" },
       });
-
-      console.log(`[WebWallet] Org ${req.params.orgId} topped up ${tx.amount}₮`);
+      for (const tx of txs) {
+        if (!tx.qpayInvoiceId) continue;
+        const result = await subQpay.checkPayment(tx.qpayInvoiceId);
+        const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
+        if (paid && await applyWalletTopup(prisma, tx)) {
+          console.log(`[WebWallet] Org ${req.params.orgId} topped up ${tx.amount}₮`);
+        }
+      }
     } catch (err) {
       console.error("[WebWallet callback]", err.message);
     }

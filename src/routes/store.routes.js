@@ -931,14 +931,11 @@ router.post("/subscription/topup/:txId/check", async (req, res) => {
     const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
     if (!paid) return res.json({ status: "PENDING" });
 
-    await prisma.webWalletTx.update({ where: { id: tx.id }, data: { qpayStatus: "PAID" } });
-    const wallet = await prisma.webWallet.upsert({
-      where: { orgId: req.org.orgId },
-      create: { orgId: req.org.orgId, balance: tx.amount },
-      update: { balance: { increment: tx.amount } },
-    });
+    const { applyWalletTopup } = require("../services/payment.service");
+    await applyWalletTopup(prisma, tx); // идемпотент — давхар цэнэглэхгүй
+    const wallet = await prisma.webWallet.findUnique({ where: { orgId: req.org.orgId } });
 
-    res.json({ status: "PAID", balance: wallet.balance });
+    res.json({ status: "PAID", balance: wallet?.balance ?? 0 });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

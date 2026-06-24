@@ -3,19 +3,20 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const { getPrisma } = require("../lib/db");
 const { authMiddleware } = require("../middleware/auth");
+const { rateLimit } = require("../middleware/rateLimit");
 const { sendText } = require("../services/facebook.service");
 
 const router = express.Router();
 
 // POST /admin/login
-router.post("/login", (req, res) => {
+router.post("/login", rateLimit({ windowMs: 60_000, max: 5 }), (req, res) => {
   const { password } = req.body;
   if (!process.env.ADMIN_PASSWORD || password !== process.env.ADMIN_PASSWORD) {
     return res.status(401).json({ error: "Нууц үг буруу" });
   }
   const token = jwt.sign(
     { admin: true },
-    process.env.JWT_SECRET || "mongolagent_admin_secret_change_me",
+    require("../lib/jwtSecret").jwtSecret(),
     { expiresIn: "7d" }
   );
   res.json({ token });

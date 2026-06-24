@@ -1,5 +1,6 @@
 "use strict";
 const jwt = require("jsonwebtoken");
+const { jwtSecret } = require("../lib/jwtSecret");
 
 function authMiddleware(req, res, next) {
   const auth = req.headers.authorization;
@@ -7,7 +8,10 @@ function authMiddleware(req, res, next) {
 
   const token = auth.slice(7);
   try {
-    req.admin = jwt.verify(token, process.env.JWT_SECRET || "mongolagent_admin_secret_change_me");
+    const payload = jwt.verify(token, jwtSecret());
+    // ЗААВАЛ admin claim шалгана — энгийн хэрэглэгчийн token-оор admin болохоос сэргийлнэ
+    if (payload.admin !== true) return res.status(403).json({ error: "Forbidden" });
+    req.admin = payload;
     next();
   } catch {
     res.status(401).json({ error: "Invalid token" });
