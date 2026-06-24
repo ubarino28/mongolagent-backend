@@ -6,6 +6,7 @@ const { decrementStockForOrder } = require("../services/stock.service");
 const { markStoreOrderPaid } = require("../services/payment.service");
 const { rateLimit } = require("../middleware/rateLimit");
 const checkoutLimiter = rateLimit({ windowMs: 60_000, max: 12 }); // checkout/discount spam-аас
+const reviewLimiter = rateLimit({ windowMs: 60_000, max: 6 }); // сэтгэгдэл спам-аас
 
 const router = express.Router();
 
@@ -297,6 +298,51 @@ router.get("/order/:id/status", async (req, res) => {
       return res.json({ status: "PAID", orderStatus: "PAID" });
     }
     res.json({ status: "PENDING", orderStatus: order.status });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /storefront/:slug/product/:productId/reviews — батлагдсан сэтгэгдэл + дундаж үнэлгээ
+router.get("/:slug/product/:productId/reviews", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { slug: String(req.params.slug).toLowerCase() }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const reviews = await prisma.review.findMany({
+      where: { storeId: store.id, productId: req.params.productId, approved: true },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, customerName: true, rating: true, comment: true, createdAt: true },
+      take: 100,
+    });
+    const count = reviews.length;
+    const avg = count ? reviews.reduce((s, r) => s + r.rating, 0) / count : 0;
+    res.json({ reviews, count, avg: Math.round(avg * 10) / 10 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /storefront/:slug/reviews — сэтгэгдэл үлдээх (нийтийн)
+router.post("/:slug/reviews", reviewLimiter, async (req, res) => {
+  try {
+    const { productId, name, rating, comment } = req.body || {};
+    if (!productId) return res.status(400).json({ error: "Бараа заагаагүй байна" });
+    const r = Math.max(1, Math.min(5, Math.floor(Number(rating) || 0)));
+    if (!r) return res.status(400).json({ error: "Үнэлгээ (1-5) өгнө үү" });
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { slug: String(req.params.slug).toLowerCase() }, select: { id: true, orgId: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    // Бараа тухайн дэлгүүрийнх мөн эсэхийг шалгана
+    const product = await prisma.product.findFirst({ where: { id: String(productId), storeId: store.id }, select: { id: true } });
+    if (!product) return res.status(400).json({ error: "Бараа олдсонгүй" });
+    const review = await prisma.review.create({
+      data: {
+        storeId: store.id, orgId: store.orgId, productId: product.id,
+        customerName: name ? String(name).slice(0, 80) : null,
+        rating: r,
+        comment: comment ? String(comment).slice(0, 1000) : null,
+        approved: true,
+      },
+      select: { id: true, customerName: true, rating: true, comment: true, createdAt: true },
+    });
+    res.json({ review });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

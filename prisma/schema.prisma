@@ -274,6 +274,7 @@ model Store {
   orders     StoreOrder[]
   discounts  Discount[]
   categories StoreCategory[]
+  reviews    Review[]
 }
 
 model StorePage {
@@ -393,6 +394,22 @@ model WebWalletTx {
 
   @@index([orgId])
   @@index([qpayInvoiceId])
+}
+
+model Review {
+  id           String   @id @default(uuid())
+  storeId      String
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orgId        String
+  productId    String
+  customerName String?
+  rating       Int      @default(5)   // 1..5
+  comment      String?
+  approved     Boolean  @default(true) // худалдагч нуух/устгах боломжтой
+  createdAt    DateTime @default(now())
+
+  @@index([storeId])
+  @@index([productId, approved])
 }
 
 model StoreOrder {

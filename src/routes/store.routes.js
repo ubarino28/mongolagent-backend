@@ -517,6 +517,48 @@ router.patch("/orders/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Reviews (барааны сэтгэгдэл — модераци) ──────────────────────────────────
+
+// GET /store/reviews — бүх сэтгэгдэл (бараа тус бүрийн нэртэй)
+router.get("/reviews", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const reviews = await prisma.review.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "desc" }, take: 500 });
+    const ids = [...new Set(reviews.map((r) => r.productId))];
+    const products = await prisma.product.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } });
+    const nameById = new Map(products.map((p) => [p.id, p.name]));
+    res.json({ reviews: reviews.map((r) => ({ ...r, productName: nameById.get(r.productId) || "—" })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH /store/reviews/:id — нуух/харуулах (approved)
+router.patch("/reviews/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const review = await prisma.review.findFirst({ where: { id: req.params.id, storeId: store.id } });
+    if (!review) return res.status(404).json({ error: "Сэтгэгдэл олдсонгүй" });
+    const updated = await prisma.review.update({ where: { id: review.id }, data: { approved: !!req.body.approved } });
+    res.json({ review: updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /store/reviews/:id
+router.delete("/reviews/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const review = await prisma.review.findFirst({ where: { id: req.params.id, storeId: store.id } });
+    if (!review) return res.status(404).json({ error: "Сэтгэгдэл олдсонгүй" });
+    await prisma.review.delete({ where: { id: review.id } });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Customers (захиалгаас цуглуулсан худалдан авагчид) ──────────────────────
 
 // GET /store/customers — захиалгуудаас хэрэглэгчдийг (утас/имэйлээр) нэгтгэж гаргана
