@@ -270,6 +270,7 @@ router.get("/order/:id", async (req, res) => {
         discountAmount: o.discountAmount,
         deliveryFee: o.deliveryFee,
         deliveryMethod: o.deliveryMethod,
+        trackingNo: o.trackingNo,
         items: o.items,
         customerName: o.customerName,
         createdAt: o.createdAt,

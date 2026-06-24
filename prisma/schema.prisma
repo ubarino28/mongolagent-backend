@@ -410,6 +410,7 @@ model StoreOrder {
   deliveryMethod  String?                   // inUB | countryside | pickup
   deliveryFee     Float    @default(0)      // хүргэлтийн төлбөр
   status          String   @default("NEW") // NEW | PAID | SHIPPED | DONE | CANCELLED
+  trackingNo      String?                   // хүргэлтийн дугаар (худалдагч оруулна)
   notes           String?
   qpayInvoiceId   String?
   qpayQrText      String?

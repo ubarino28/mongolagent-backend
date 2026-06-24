@@ -495,13 +495,23 @@ router.get("/orders", async (req, res) => {
 // PATCH /store/orders/:id — захиалгын статус шинэчлэх
 router.patch("/orders/:id", async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, trackingNo } = req.body;
     const prisma = getPrisma();
     const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
     if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
     const order = await prisma.storeOrder.findFirst({ where: { id: req.params.id, storeId: store.id } });
     if (!order) return res.status(404).json({ error: "Захиалга олдсонгүй" });
-    const updated = await prisma.storeOrder.update({ where: { id: order.id }, data: { status: status || order.status } });
+
+    const ALLOWED = ["NEW", "PAID", "SHIPPED", "DONE", "CANCELLED"];
+    const data = {};
+    if (status !== undefined) {
+      if (!ALLOWED.includes(status)) return res.status(400).json({ error: "Буруу төлөв" });
+      data.status = status;
+    }
+    if (trackingNo !== undefined) data.trackingNo = trackingNo ? String(trackingNo).slice(0, 120) : null;
+    if (Object.keys(data).length === 0) return res.json({ order });
+
+    const updated = await prisma.storeOrder.update({ where: { id: order.id }, data });
     res.json({ order: updated });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
