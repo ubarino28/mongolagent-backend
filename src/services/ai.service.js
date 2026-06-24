@@ -289,6 +289,19 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "check_order",
+      description: "Хэрэглэгчийн захиалгын статус шалгах. Утасны дугаараар хайна. Утас өгөөгүй бол одоогийн чатын хэрэглэгчийн сүүлийн захиалгыг шалгана.",
+      parameters: {
+        type: "object",
+        properties: {
+          phone: { type: "string", description: "Хэрэглэгчийн утасны дугаар" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "confirm_payment",
       description: "Хэрэглэгч 'төлчлөө', 'явуулчлаа', 'шилжүүлсэн' гэх мэт төлбөр хийснээ мэдэгдсэн үед дуудна. Захиалгын статусыг PAYMENT_SENT болгож эзэнд мэдэгдэл явуулна.",
       parameters: {
@@ -625,6 +638,41 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         } catch (e) {
           console.error("[CHECK_TABLES] error:", e.message);
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Ширээ шалгахад алдаа гарлаа: " + e.message }) });
+        }
+
+      } else if (toolCall.function.name === "check_order") {
+        try {
+          const phone = (args.phone || "").trim();
+          const where = { orgId };
+          if (phone) {
+            where.customerPhone = phone;
+          } else {
+            where.psid = psid;
+          }
+          const orders = await prisma.turuuOrder.findMany({
+            where,
+            orderBy: { createdAt: "desc" },
+            take: 3,
+            select: { id: true, status: true, totalAmount: true, items: true, customerName: true, customerPhone: true, createdAt: true, qpayStatus: true },
+          });
+          if (orders.length === 0) {
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ found: false, error: phone ? `${phone} дугаартай захиалга олдсонгүй` : "Танд захиалга олдсонгүй" }) });
+          } else {
+            const STATUS_MN = { NEW: "Шинэ — төлбөр хүлээгдэж байна", PAYMENT_SENT: "Төлбөр илгээсэн — шалгагдаж байна", PAID: "Төлбөр баталгаажсан — хүргэлтэнд бэлдэгдэж байна", CANCELLED: "Цуцлагдсан" };
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({
+              found: true,
+              orders: orders.map((o) => ({
+                status: o.status,
+                statusLabel: STATUS_MN[o.status] || o.status,
+                totalAmount: o.totalAmount,
+                items: o.items,
+                createdAt: o.createdAt,
+                paid: o.status === "PAID" || o.qpayStatus === "PAID",
+              })),
+            }) });
+          }
+        } catch (e) {
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ found: false, error: e.message }) });
         }
 
       } else if (toolCall.function.name === "confirm_payment") {
