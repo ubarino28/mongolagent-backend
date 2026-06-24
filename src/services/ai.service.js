@@ -208,7 +208,7 @@ const TOOLS = [
           totalAmount: { type: "number" },
           notes:       { type: "string" },
         },
-        required: ["customerPhone", "items", "totalAmount"],
+        required: ["customerName", "customerPhone", "items", "totalAmount"],
       },
     },
   },
@@ -282,7 +282,20 @@ const TOOLS = [
           depositAmount:   { type: "number" },
           notes:           { type: "string" },
         },
-        required: ["staffId", "serviceName", "durationMinutes", "date", "timeSlot", "customerPhone"],
+        required: ["staffId", "serviceName", "durationMinutes", "date", "timeSlot", "customerName", "customerPhone"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "confirm_payment",
+      description: "Хэрэглэгч 'төлчлөө', 'явуулчлаа', 'шилжүүлсэн' гэх мэт төлбөр хийснээ мэдэгдсэн үед дуудна. Захиалгын статусыг PAYMENT_SENT болгож эзэнд мэдэгдэл явуулна.",
+      parameters: {
+        type: "object",
+        properties: {
+          notes: { type: "string", description: "Хэрэглэгчийн нэмэлт тайлбар (байвал)" },
+        },
       },
     },
   },
@@ -326,7 +339,7 @@ const TOOLS = [
           customerPhone: { type: "string" },
           notes:         { type: "string" },
         },
-        required: ["tableId", "date", "timeSlot", "guestCount", "customerPhone"],
+        required: ["tableId", "date", "timeSlot", "guestCount", "customerName", "customerPhone"],
       },
     },
   },
@@ -614,6 +627,39 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Ширээ шалгахад алдаа гарлаа: " + e.message }) });
         }
 
+      } else if (toolCall.function.name === "confirm_payment") {
+        try {
+          const order = await prisma.turuuOrder.findFirst({
+            where: { psid, orgId, status: { notIn: ["PAID", "CANCELLED"] } },
+            orderBy: { createdAt: "desc" },
+          });
+          if (!order) {
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: "Төлөгдөөгүй захиалга олдсонгүй" }) });
+          } else {
+            await prisma.turuuOrder.update({ where: { id: order.id }, data: { status: "PAYMENT_SENT" } });
+            const orderCode = order.id.slice(-6).toUpperCase();
+            // Telegram мэдэгдэл (бэлэн код, telegram холбогдсон үед ажиллана)
+            if (orgId) {
+              try {
+                const org = await prisma.organization.findUnique({
+                  where: { id: orgId },
+                  select: { telegramBotToken: true, telegramChatId: true },
+                });
+                const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+                const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+                if (botToken && chatId) {
+                  const axios = require("axios");
+                  const text = `💳 Хэрэглэгч төлбөр шилжүүлснээ мэдэгдлээ!\nЗахиалга #${orderCode}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}\n${args.notes ? `Тайлбар: ${args.notes}` : ""}\nDashboard-аас шалгаж баталгаажуулна уу!`;
+                  await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
+                }
+              } catch { /* non-blocking */ }
+            }
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true, orderCode }) });
+          }
+        } catch (e) {
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: e.message }) });
+        }
+
       } else if (toolCall.function.name === "save_reservation") {
         try {
           const conflict = await prisma.turuuReservation.findFirst({ where: { tableId: args.tableId, date: args.date, timeSlot: args.timeSlot, status: { not: "CANCELLED" } } });
@@ -718,14 +764,15 @@ async function processReceiptImage(psid, imageUrl, orgId = null) {
   let replyText;
   let amountMatches = false;
 
-  // ⚠️ Дансаар төлбөрийг AI автоматаар "PAID" болгохгүй — зөвхөн QPay л автоматаар баталгаажина.
-  // Дансаар бол энд зөвхөн дүнг танин таалцаж, admin-д ШАЛГУУЛАХААР мэдэгдэнэ.
   if (extractedAmount > 0 && extractedAmount >= expected) {
     amountMatches = true;
-    replyText = `📸 Баримтыг хүлээн авлаа! Захиалга #${orderCode} (${expected.toLocaleString()}₮)-ийн дүн тохирч байна — манай ажилтан баталгаажуулсны дараа захиалгыг баталгаажуулна 🙏`;
+    await prisma.turuuOrder.update({ where: { id: order.id }, data: { status: "PAYMENT_SENT" } });
+    replyText = `📸 Баримтыг хүлээн авлаа! Захиалга #${orderCode} (${expected.toLocaleString()}₮)-ийн дүн тохирч байна — манай ажилтан баталгаажуулсны дараа мэдэгдэл очно 🙏`;
   } else if (extractedAmount > 0) {
+    await prisma.turuuOrder.update({ where: { id: order.id }, data: { status: "PAYMENT_SENT" } });
     replyText = `⚠️ Баримтаас ${extractedAmount.toLocaleString()}₮ танигдлаа, харин захиалгын дүн ${expected.toLocaleString()}₮ байна. Манай ажилтан шалгаж тантай холбогдоно уу 🙏`;
   } else {
+    await prisma.turuuOrder.update({ where: { id: order.id }, data: { status: "PAYMENT_SENT" } });
     replyText = `📸 Баримтыг хүлээн авлаа! Манай ажилтан шалгаж баталгаажуулна, түр хүлээнэ үү 🙏`;
   }
 

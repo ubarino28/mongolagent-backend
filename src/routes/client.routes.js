@@ -1421,6 +1421,28 @@ router.put("/orders/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /client/orders/:id/confirm-payment — Эзэн төлбөр баталгаажуулах + хэрэглэгчид Messenger мэдэгдэл
+router.post("/orders/:id/confirm-payment", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const order = await prisma.turuuOrder.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
+    if (!order) return res.status(404).json({ error: "Not found" });
+    await prisma.turuuOrder.update({ where: { id: order.id }, data: { status: "PAID", qpayStatus: "PAID" } });
+    // Messenger-ээр хэрэглэгчид мэдэгдэл
+    if (order.psid) {
+      try {
+        const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { fbPageToken: true } });
+        const token = org?.fbPageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+        if (token) {
+          const orderCode = order.id.slice(-6).toUpperCase();
+          await sendText(order.psid, `✅ Таны төлбөр баталгаажлаа! Захиалга #${orderCode} батлагдлаа. Удахгүй хүргэлт хийгдэнэ 🙏`, token).catch(() => {});
+        }
+      } catch { /* non-blocking */ }
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // DELETE /client/orders/:id
 router.delete("/orders/:id", async (req, res) => {
   try {
