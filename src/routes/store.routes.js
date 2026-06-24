@@ -503,7 +503,7 @@ router.patch("/orders/:id", async (req, res) => {
     const order = await prisma.storeOrder.findFirst({ where: { id: req.params.id, storeId: store.id } });
     if (!order) return res.status(404).json({ error: "Захиалга олдсонгүй" });
 
-    const ALLOWED = ["NEW", "PAID", "SHIPPED", "DONE", "CANCELLED"];
+    const ALLOWED = ["NEW", "PAID", "SHIPPED", "DONE", "CANCELLED", "REFUNDED"];
     const data = {};
     if (status !== undefined) {
       if (!ALLOWED.includes(status)) return res.status(400).json({ error: "Буруу төлөв" });
@@ -513,6 +513,33 @@ router.patch("/orders/:id", async (req, res) => {
     if (Object.keys(data).length === 0) return res.json({ order });
 
     const updated = await prisma.storeOrder.update({ where: { id: order.id }, data });
+    res.json({ order: updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /store/orders/:id/refund — буцаалт бүртгэх (дүн + шалтгаан). Бүтэн бол status=REFUNDED
+router.post("/orders/:id/refund", async (req, res) => {
+  try {
+    const { amount, reason } = req.body || {};
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const order = await prisma.storeOrder.findFirst({ where: { id: req.params.id, storeId: store.id } });
+    if (!order) return res.status(404).json({ error: "Захиалга олдсонгүй" });
+
+    const amt = Math.max(0, Math.min(Number(amount) || 0, order.totalAmount));
+    if (!amt) return res.status(400).json({ error: "Буцаах дүнг зөв оруулна уу" });
+    const full = amt >= order.totalAmount;
+
+    const updated = await prisma.storeOrder.update({
+      where: { id: order.id },
+      data: {
+        refundedAmount: amt,
+        refundReason: reason ? String(reason).slice(0, 300) : null,
+        refundedAt: new Date(),
+        status: full ? "REFUNDED" : order.status,
+      },
+    });
     res.json({ order: updated });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

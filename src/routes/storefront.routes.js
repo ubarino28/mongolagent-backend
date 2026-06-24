@@ -272,6 +272,7 @@ router.get("/order/:id", async (req, res) => {
         deliveryFee: o.deliveryFee,
         deliveryMethod: o.deliveryMethod,
         trackingNo: o.trackingNo,
+        refundedAmount: o.refundedAmount,
         items: o.items,
         customerName: o.customerName,
         createdAt: o.createdAt,

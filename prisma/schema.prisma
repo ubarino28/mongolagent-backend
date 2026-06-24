@@ -427,8 +427,11 @@ model StoreOrder {
   discountAmount  Float    @default(0)      // хямдруулсан дүн
   deliveryMethod  String?                   // inUB | countryside | pickup
   deliveryFee     Float    @default(0)      // хүргэлтийн төлбөр
-  status          String   @default("NEW") // NEW | PAID | SHIPPED | DONE | CANCELLED
+  status          String   @default("NEW") // NEW | PAID | SHIPPED | DONE | CANCELLED | REFUNDED
   trackingNo      String?                   // хүргэлтийн дугаар (худалдагч оруулна)
+  refundedAmount  Float    @default(0)      // буцаасан дүн (хэсэгчилсэн ч байж болно)
+  refundReason    String?                   // буцаалтын шалтгаан
+  refundedAt      DateTime?                 // буцаасан огноо
   notes           String?
   qpayInvoiceId   String?
   qpayQrText      String?
