@@ -10,6 +10,7 @@ const vdomains = require("../services/vercelDomains.service");
 const platformQpay = require("../services/subscription-qpay.service");
 const { fulfillDomainOrder } = require("../services/domain.service");
 const { logAudit } = require("../services/audit.service");
+const { generateSections } = require("../services/aiSection.service");
 const bcrypt = require("bcryptjs");
 
 const router = express.Router();
@@ -559,6 +560,17 @@ router.post("/orders/:id/refund", async (req, res) => {
     });
     await logAudit(prisma, req, "order.refund", order.id, { amount: amt, full });
     res.json({ order: updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── AI section generator ────────────────────────────────────────────────────
+// POST /store/ai/section { prompt } → { blocks: [{ type, props }] }
+router.post("/ai/section", async (req, res) => {
+  try {
+    const { prompt } = req.body || {};
+    if (!prompt || String(prompt).trim().length < 4) return res.status(400).json({ error: "Бизнесээ товч тайлбарлана уу" });
+    const blocks = await generateSections(prompt);
+    res.json({ blocks });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
