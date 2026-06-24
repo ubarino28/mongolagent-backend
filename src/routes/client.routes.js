@@ -2714,4 +2714,23 @@ router.put("/reservations/:id/status", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /client/appointment-revenue — цаг захиалгын орлого
+router.get("/appointment-revenue", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const [deposit, completed, today] = await Promise.all([
+      prisma.turuuAppointment.aggregate({ where: { orgId, depositStatus: "PAID" }, _sum: { depositAmount: true }, _count: true }),
+      prisma.turuuAppointment.count({ where: { orgId, status: "COMPLETED" } }),
+      prisma.turuuAppointment.count({ where: { orgId, status: { in: ["PENDING", "CONFIRMED"] }, date: new Date().toISOString().slice(0, 10) } }),
+    ]);
+    res.json({
+      depositTotal: deposit._sum.depositAmount || 0,
+      depositCount: deposit._count || 0,
+      completedCount: completed,
+      todayCount: today,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 module.exports = router;
