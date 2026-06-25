@@ -48,7 +48,21 @@ router.post("/", (req, res) => {
       for (const event of entry.messaging || []) {
         const psid = event.sender?.id;
         if (!psid) continue;
-        if (event.message?.is_echo) continue;
+        if (event.message?.is_echo) {
+          // Эзэн Messenger-ээс шууд хариулсан бол AI pause хийнэ
+          // Echo-д sender.id = Page ID, recipient.id = хэрэглэгчийн PSID
+          const recipientPsid = event.recipient?.id;
+          if (recipientPsid && orgId) {
+            try {
+              const prisma = getPrisma();
+              await prisma.turuuChat.updateMany({
+                where: { psid: recipientPsid, orgId },
+                data: { aiPaused: true },
+              });
+            } catch { /* non-blocking */ }
+          }
+          continue;
+        }
 
         const token = pageToken || process.env.FB_PAGE_ACCESS_TOKEN;
 

@@ -76,8 +76,11 @@ const { getPrisma } = require("./lib/db");
         "updatedAt" TIMESTAMPTZ DEFAULT now()
       )
     `);
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "TuruuChat" ADD COLUMN IF NOT EXISTS "aiPaused" BOOLEAN DEFAULT false`
+    );
   } catch (e) {
-    console.warn("[migration] variants column:", e.message);
+    console.warn("[migration]", e.message);
   }
 })();
 

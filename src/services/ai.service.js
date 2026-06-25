@@ -392,10 +392,11 @@ function queuedProcessMessage(psid, userText, orgId, imageUrl = null) {
 async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   const prisma = getPrisma();
 
-  // Block + handoff шалгах
+  // Block + aiPaused + handoff шалгах
   try {
     const chatRecord = await prisma.turuuChat.findFirst({ where: { psid, orgId } });
     if (chatRecord?.blocked) return null;
+    if (chatRecord?.aiPaused) return null;
     if (chatRecord?.handoffRequested) {
       const elapsed = chatRecord.handoffAt ? Date.now() - new Date(chatRecord.handoffAt).getTime() : Infinity;
       if (elapsed < 10 * 60 * 1000) return null; // 10 минут болоогүй — AI хариулахгүй
@@ -484,6 +485,27 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
 
       } else if (toolCall.function.name === "save_order") {
         const order = await saveOrder({ psid, orgId, ...args });
+
+        // Stock автоматаар хасах (давтан бол алгасна)
+        if (orgId && order?.id && !order.duplicate) {
+          try {
+            const orderItems = Array.isArray(args.items) ? args.items : [];
+            for (const it of orderItems) {
+              if (!it.name || !it.qty) continue;
+              const kbItems = await prisma.turuuKnowledge.findMany({ where: { orgId, active: true }, select: { id: true, question: true, variants: true } });
+              const match = kbItems.find((k) => normalizeText(k.question).includes(normalizeText(it.name)) || normalizeText(it.name).includes(normalizeText(k.question)));
+              if (match && Array.isArray(match.variants) && match.variants.length > 0) {
+                const newVariants = match.variants.map((v) => {
+                  const colorOk = !it.color || normalizeText(v.color || "").includes(normalizeText(it.color)) || normalizeText(it.color).includes(normalizeText(v.color || ""));
+                  const sizeOk = !it.size || String(v.size || "").toLowerCase() === String(it.size).toLowerCase();
+                  if (colorOk && sizeOk) return { ...v, stock: Math.max(0, (v.stock || 0) - (it.qty || 1)) };
+                  return v;
+                });
+                await prisma.turuuKnowledge.update({ where: { id: match.id }, data: { variants: newVariants } });
+              }
+            }
+          } catch (e) { console.error("[auto-stock]", e.message); }
+        }
 
         // QPay auto-invoice: org-д merchant + данс тохируулсан бол автоматаар QR үүсгэнэ
         // (давтан дуудсан захиалга бол дахин invoice үүсгэхгүй — аль хэдийн явуулсан)
@@ -614,13 +636,25 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
 
       } else if (toolCall.function.name === "check_menu") {
         try {
-          const items = await prisma.turuuMenuItem.findMany({ where: { orgId, isActive: true }, orderBy: [{ category: "asc" }, { sortOrder: "asc" }] });
-          const menu = items.map((i) => {
-            const portions = Array.isArray(i.portions) ? i.portions : [];
-            const portionStr = portions.length > 0 ? portions.map((p) => `${p.name}: ${p.price}₮`).join(", ") : "";
-            return `${i.name} (${i.category || "Бусад"}) — ${i.price}₮${portionStr ? ` | Порц: ${portionStr}` : ""}${i.description ? ` | ${i.description}` : ""}`;
-          }).join("\n");
-          toolResults.push({ tool_call_id: toolCall.id, content: menu || "Меню хоосон байна." });
+          const kbItems = await prisma.turuuKnowledge.findMany({
+            where: { orgId, active: true, category: { startsWith: "Бүтээгдэхүүн" } },
+            select: { question: true, answer: true, category: true, variants: true },
+            orderBy: { category: "asc" },
+          });
+          if (kbItems.length === 0) {
+            toolResults.push({ tool_call_id: toolCall.id, content: "Меню хоосон байна." });
+          } else {
+            const menu = kbItems.map((item) => {
+              let line = `${item.question} (${(item.category || "").replace("Бүтээгдэхүүн / ", "")}) — ${item.answer}`;
+              const vars = Array.isArray(item.variants) ? item.variants : [];
+              if (vars.length > 0) {
+                const varStr = vars.map((v) => `${[v.size, v.color].filter(Boolean).join("/")}: ${(v.stock ?? 0) > 0 ? "байгаа" : "дууссан"}`).join(", ");
+                line += ` | ${varStr}`;
+              }
+              return line;
+            }).join("\n");
+            toolResults.push({ tool_call_id: toolCall.id, content: menu });
+          }
         } catch {
           toolResults.push({ tool_call_id: toolCall.id, content: "Меню авахад алдаа гарлаа." });
         }

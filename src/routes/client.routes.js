@@ -254,8 +254,8 @@ router.post("/conversations/:psid/reply", async (req, res) => {
     messages.push({ role: "assistant", content: `[Admin] ${text}` });
     await prisma.turuuChat.upsert({
       where: { orgId_psid: { orgId: req.org.orgId, psid: req.params.psid } },
-      create: { psid: req.params.psid, orgId: req.org.orgId, messages, handoffRequested: true, handoffAt: new Date() },
-      update: { messages, handoffRequested: true, handoffAt: new Date() },
+      create: { psid: req.params.psid, orgId: req.org.orgId, messages, aiPaused: true, handoffRequested: true, handoffAt: new Date() },
+      update: { messages, aiPaused: true, handoffRequested: true, handoffAt: new Date() },
     });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -271,6 +271,20 @@ router.put("/conversations/:psid/block", async (req, res) => {
       update: { blocked: !!req.body.blocked },
     });
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /client/conversations/:psid/ai-pause — AI түр унтраах/асаах
+router.put("/conversations/:psid/ai-pause", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const paused = !!req.body.paused;
+    await prisma.turuuChat.upsert({
+      where: { orgId_psid: { orgId: req.org.orgId, psid: req.params.psid } },
+      create: { psid: req.params.psid, orgId: req.org.orgId, aiPaused: paused },
+      update: { aiPaused: paused },
+    });
+    res.json({ ok: true, aiPaused: paused });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1397,10 +1411,10 @@ router.get("/orders", async (req, res) => {
 // POST /client/orders
 router.post("/orders", async (req, res) => {
   try {
-    const { customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes, psid } = req.body;
+    const { customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes, psid, status } = req.body;
     const prisma = getPrisma();
     const order = await prisma.turuuOrder.create({
-      data: { orgId: req.org.orgId, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes, psid },
+      data: { orgId: req.org.orgId, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes, psid, ...(status && { status }) },
     });
     res.json(order);
   } catch (e) { res.status(500).json({ error: e.message }); }
