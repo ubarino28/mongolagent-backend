@@ -896,10 +896,35 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
     const followUp = await getOpenAI().chat.completions.create({
       model: aiSettings.model,
       messages: followUpMessages,
+      tools: TOOLS,
+      tool_choice: "auto",
       temperature: aiSettings.temperature,
       max_tokens:  512,
     });
-    replyText = followUp.choices[0].message.content?.trim() || "";
+
+    // Follow-up-д дахин tool дуудсан бол 2-р round боловсруулна
+    if (followUp.choices[0].finish_reason === "tool_calls") {
+      const toolCalls2 = followUp.choices[0].message.tool_calls;
+      const toolResults2 = [];
+      for (const tc of toolCalls2) {
+        const a = JSON.parse(tc.function.arguments);
+        if (tc.function.name === "search_knowledge") {
+          const { text } = await searchKnowledge(orgId, a.query);
+          toolResults2.push({ tool_call_id: tc.id, content: text });
+        } else {
+          toolResults2.push({ tool_call_id: tc.id, content: JSON.stringify({ error: "2-р round-д зөвхөн search_knowledge дэмжигдэнэ" }) });
+        }
+      }
+      const round3 = await getOpenAI().chat.completions.create({
+        model: aiSettings.model,
+        messages: [...followUpMessages, followUp.choices[0].message, ...toolResults2.map((r) => ({ role: "tool", tool_call_id: r.tool_call_id, content: r.content }))],
+        temperature: aiSettings.temperature,
+        max_tokens: 512,
+      });
+      replyText = round3.choices[0].message.content?.trim() || "";
+    } else {
+      replyText = followUp.choices[0].message.content?.trim() || "";
+    }
 
   } else {
     replyText = choice.message.content?.trim() || "";
