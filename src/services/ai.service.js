@@ -289,6 +289,24 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "reschedule_appointment",
+      description: "Хэрэглэгч цаг захиалгаа өөрчлөх/шилжүүлэх хүсвэл дуудна. Хуучин цагийг шинэ цаг руу шилжүүлнэ.",
+      parameters: {
+        type: "object",
+        properties: {
+          phone:      { type: "string", description: "Хэрэглэгчийн утасны дугаар" },
+          oldDate:    { type: "string", description: "Хуучин огноо YYYY-MM-DD" },
+          oldTime:    { type: "string", description: "Хуучин цаг HH:MM" },
+          newDate:    { type: "string", description: "Шинэ огноо YYYY-MM-DD" },
+          newTime:    { type: "string", description: "Шинэ цаг HH:MM" },
+        },
+        required: ["phone", "newDate", "newTime"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "check_order",
       description: "Хэрэглэгчийн захиалгын статус шалгах. Утасны дугаараар хайна. Утас өгөөгүй бол одоогийн чатын хэрэглэгчийн сүүлийн захиалгыг шалгана.",
       parameters: {
@@ -650,6 +668,30 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
           }
         } catch {
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Цагийн мэдээлэл авахад алдаа гарлаа" }) });
+        }
+
+      } else if (toolCall.function.name === "reschedule_appointment") {
+        try {
+          const { phone, oldDate, oldTime, newDate, newTime } = args;
+          const where = { orgId, customerPhone: phone, status: { notIn: ["CANCELLED", "COMPLETED"] } };
+          if (oldDate) where.date = oldDate;
+          if (oldTime) where.timeSlot = oldTime;
+          const appt = await prisma.turuuAppointment.findFirst({ where, orderBy: { createdAt: "desc" } });
+          if (!appt) {
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: "Тухайн утасны дугаартай цаг захиалга олдсонгүй" }) });
+          } else {
+            const conflict = await prisma.turuuAppointment.findFirst({
+              where: { staffId: appt.staffId, date: newDate, timeSlot: newTime, status: { not: "CANCELLED" }, id: { not: appt.id } },
+            });
+            if (conflict) {
+              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: `${newTime} цаг захиалагдсан байна` }) });
+            } else {
+              await prisma.turuuAppointment.update({ where: { id: appt.id }, data: { date: newDate, timeSlot: newTime } });
+              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true, oldDate: appt.date, oldTime: appt.timeSlot, newDate, newTime, staffName: appt.serviceName }) });
+            }
+          }
+        } catch (e) {
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: e.message }) });
         }
 
       } else if (toolCall.function.name === "save_appointment") {
