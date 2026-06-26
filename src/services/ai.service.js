@@ -374,6 +374,21 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "cancel_reservation",
+      description: "Ширээ захиалга цуцлах. Утасны дугаараар хайж CANCELLED болгоно. Тухайн ширээ/цаг автоматаар чөлөөтэй болно.",
+      parameters: {
+        type: "object",
+        properties: {
+          phone: { type: "string", description: "Хэрэглэгчийн утасны дугаар" },
+          date:  { type: "string", description: "Захиалсан огноо YYYY-MM-DD (байвал)" },
+        },
+        required: ["phone"],
+      },
+    },
+  },
 ];
 
 async function loadAISettings(orgId = null) {
@@ -826,6 +841,21 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
             data: { orgId, psid, tableId: args.tableId, date: args.date, timeSlot: args.timeSlot, guestCount: Number(args.guestCount), customerName: args.customerName, customerPhone: args.customerPhone, notes: args.notes },
           });
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true, reservationId: reservation.id }) });
+        } catch (e) {
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: e.message }) });
+        }
+
+      } else if (toolCall.function.name === "cancel_reservation") {
+        try {
+          const where = { orgId, customerPhone: args.phone, status: { notIn: ["CANCELLED", "COMPLETED"] } };
+          if (args.date) where.date = args.date;
+          const reservation = await prisma.turuuReservation.findFirst({ where, orderBy: { createdAt: "desc" } });
+          if (!reservation) {
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: "Тухайн дугаартай ширээ захиалга олдсонгүй" }) });
+          } else {
+            await prisma.turuuReservation.update({ where: { id: reservation.id }, data: { status: "CANCELLED" } });
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true, date: reservation.date, timeSlot: reservation.timeSlot, guestCount: reservation.guestCount }) });
+          }
         } catch (e) {
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: e.message }) });
         }
