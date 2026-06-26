@@ -405,16 +405,8 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
     }
   } catch { /* proceed */ }
 
-  // Emoji/sticker → OpenAI дуудахгүй, энгийн хариу
-  if (!imageUrl && userText) {
-    const stripped = userText.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\s]/gu, "").trim();
-    if (stripped.length === 0) {
-      const reply = "😊 Танд асуух зүйл байвал бичээрэй!";
-      const hist = await getHistory(psid, orgId);
-      await saveHistory(psid, [...hist, { role: "user", content: userText }, { role: "assistant", content: reply }], orgId);
-      return reply;
-    }
-  }
+  // Emoji дангаар → яриаг context-оор нь ойлгож хариулахгүй бол квот үрэнэ
+  // Тиймээс emoji-г алгасахгүй, AI-д дамжуулна — history-тэй учир context мэдэж зохицоно
 
   // KB exact match cache — таарвал OpenAI дуудахгүй, хямд бөгөөд хурдан
   // (зурагтай мессеж бол алгасна — зургийн агуулгаас хамаарч хариулт өөр байж болзошгүй)
