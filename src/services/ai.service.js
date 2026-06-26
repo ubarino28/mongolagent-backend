@@ -376,17 +376,42 @@ async function loadAISettings(orgId = null) {
   }
 }
 
-// psid тус бүрт processing queue — race condition запобігає
+// psid тус бүрт debounce — хурдан олон мессежийг нэгтгэнэ
+const pendingMessages = new Map();
 const processingQueues = new Map();
+const DEBOUNCE_MS = 3000;
 
 function queuedProcessMessage(psid, userText, orgId, imageUrl = null) {
-  if (!processingQueues.has(psid)) {
-    processingQueues.set(psid, Promise.resolve());
+  // Зурагтай мессежийг debounce хийхгүй — шууд боловсруулна
+  if (imageUrl) {
+    if (!processingQueues.has(psid)) processingQueues.set(psid, Promise.resolve());
+    const next = processingQueues.get(psid).then(() => processMessage(psid, userText, orgId, imageUrl));
+    processingQueues.set(psid, next.catch(() => {}));
+    return next;
   }
-  const next = processingQueues.get(psid).then(() => processMessage(psid, userText, orgId, imageUrl));
-  // Queue-г цэвэрлэх — хэтэрхий урт уламжлал хуримтлагдахгүй
-  processingQueues.set(psid, next.catch(() => {}));
-  return next;
+
+  return new Promise((resolve) => {
+    const existing = pendingMessages.get(psid);
+    if (existing) {
+      existing.texts.push(userText);
+      clearTimeout(existing.timer);
+      existing.resolvers.push(resolve);
+    } else {
+      pendingMessages.set(psid, { texts: [userText], orgId, resolvers: [resolve] });
+    }
+
+    const entry = pendingMessages.get(psid);
+    entry.timer = setTimeout(() => {
+      const { texts, orgId: oid, resolvers } = pendingMessages.get(psid);
+      pendingMessages.delete(psid);
+      const combined = texts.join("\n");
+
+      if (!processingQueues.has(psid)) processingQueues.set(psid, Promise.resolve());
+      const next = processingQueues.get(psid).then(() => processMessage(psid, combined, oid));
+      processingQueues.set(psid, next.catch(() => {}));
+      next.then((result) => { resolvers[0](result); for (let i = 1; i < resolvers.length; i++) resolvers[i](null); }).catch(() => resolvers.forEach((r) => r(null)));
+    }, DEBOUNCE_MS);
+  });
 }
 
 async function processMessage(psid, userText, orgId = null, imageUrl = null) {
