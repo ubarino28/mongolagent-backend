@@ -636,6 +636,11 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
       } else if (toolCall.function.name === "check_availability") {
         try {
           const { date, staffId, serviceName } = args;
+          const today = new Date(); today.setHours(0, 0, 0, 0);
+          const reqDate = new Date(`${date}T00:00:00`);
+          if (reqDate < today) {
+            toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ availableSlots: [], reason: "Өнгөрсөн огноо — ирээдүйн өдөр сонгоно уу" }) });
+          } else {
           const staff = await prisma.turuuStaff.findFirst({ where: { id: staffId, orgId, isActive: true } });
           if (!staff) {
             toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Мастер олдсонгүй" }) });
@@ -665,6 +670,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
               const available = allSlots.filter((s) => !bookedTimes.has(s));
               toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ availableSlots: available, staffName: staff.name }) });
             }
+          }
           }
         } catch {
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Цагийн мэдээлэл авахад алдаа гарлаа" }) });
