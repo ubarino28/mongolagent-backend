@@ -66,6 +66,9 @@ router.post("/", (req, res) => {
 
         const token = pageToken || process.env.FB_PAGE_ACCESS_TOKEN;
 
+        // Sticker → алгасна (хариу шаардлагагүй)
+        if (event.message?.sticker_id) continue;
+
         // Voice message → speech-to-text (Whisper)
         const audioAttachment = event.message?.attachments?.find((a) => a.type === "audio");
         if (audioAttachment?.payload?.url) {
