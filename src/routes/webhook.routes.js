@@ -66,6 +66,26 @@ router.post("/", (req, res) => {
 
         const token = pageToken || process.env.FB_PAGE_ACCESS_TOKEN;
 
+        // Voice message → speech-to-text (Whisper)
+        const audioAttachment = event.message?.attachments?.find((a) => a.type === "audio");
+        if (audioAttachment?.payload?.url) {
+          try {
+            await sendTypingOn(psid, token);
+            const { transcribeAudio } = require("../services/ai.service");
+            const transcript = await transcribeAudio(audioAttachment.payload.url);
+            if (transcript) {
+              const reply = await processMessage(psid, transcript, orgId);
+              if (reply) await sendText(psid, reply, token);
+            } else {
+              await sendText(psid, "Уучлаарай, дуут мессежийг таниж чадсангүй. Текстээр бичнэ үү 🙏", token).catch(() => {});
+            }
+          } catch (err) {
+            console.error("[webhook] voice error:", err.message);
+            await sendText(psid, "Уучлаарай, дуут мессеж боловсруулахад алдаа гарлаа 😔", token).catch(() => {});
+          }
+          continue;
+        }
+
         const imageAttachment = event.message?.attachments?.find((a) => a.type === "image");
         if (imageAttachment?.payload?.url) {
           try {

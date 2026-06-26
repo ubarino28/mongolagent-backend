@@ -931,4 +931,25 @@ async function processImageMessage(psid, imageUrl, captionText, orgId = null) {
   return queuedProcessMessage(psid, captionText || "", orgId, imageUrl);
 }
 
-module.exports = { processMessage: queuedProcessMessage, processReceiptImage, processImageMessage };
+// Voice message → текст (Whisper API)
+async function transcribeAudio(audioUrl) {
+  try {
+    const axios = require("axios");
+    const FormData = require("form-data");
+    const resp = await axios.get(audioUrl, { responseType: "arraybuffer" });
+    const form = new FormData();
+    form.append("file", Buffer.from(resp.data), { filename: "voice.mp4", contentType: "audio/mp4" });
+    form.append("model", "whisper-1");
+    form.append("language", "mn");
+    const result = await axios.post("https://api.openai.com/v1/audio/transcriptions", form, {
+      headers: { ...form.getHeaders(), Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      timeout: 30000,
+    });
+    return result.data?.text?.trim() || null;
+  } catch (err) {
+    console.error("[transcribe]", err.message);
+    return null;
+  }
+}
+
+module.exports = { processMessage: queuedProcessMessage, processReceiptImage, processImageMessage, transcribeAudio };
