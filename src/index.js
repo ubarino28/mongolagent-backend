@@ -30,6 +30,23 @@ async function autoCompleteReservations() {
         AND (("date" || ' ' || "timeSlot")::timestamp + ("durationMinutes" + 5) * INTERVAL '1 minute') < $1
     `, now);
     if (result2 > 0) console.log(`[auto-complete] ${result2} appointments → COMPLETED`);
+
+    // 48 цаг төлөгдөөгүй захиалга → CANCELLED + QPay invoice цуцлах
+    const twoDaysAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+    const staleOrders = await prisma.turuuOrder.findMany({
+      where: { status: "NEW", createdAt: { lt: twoDaysAgo } },
+      select: { id: true, qpayInvoiceId: true },
+    });
+    for (const order of staleOrders) {
+      try {
+        await prisma.turuuOrder.update({ where: { id: order.id }, data: { status: "CANCELLED" } });
+        if (order.qpayInvoiceId) {
+          const { cancelInvoice } = require("./services/qpay.service");
+          await cancelInvoice(order.qpayInvoiceId).catch(() => {});
+        }
+      } catch { /* non-blocking */ }
+    }
+    if (staleOrders.length > 0) console.log(`[auto-cancel] ${staleOrders.length} orders → CANCELLED`);
   } catch (e) {
     console.error("[auto-complete]", e.message);
   }
