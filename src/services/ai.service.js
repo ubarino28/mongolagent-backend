@@ -454,7 +454,11 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   try {
     const chatRecord = await prisma.turuuChat.findFirst({ where: { psid, orgId } });
     if (chatRecord?.blocked) return null;
-    if (chatRecord?.aiPaused) return null;
+    if (chatRecord?.aiPaused) {
+      const pauseElapsed = chatRecord.updatedAt ? Date.now() - new Date(chatRecord.updatedAt).getTime() : Infinity;
+      if (pauseElapsed < 10 * 60 * 1000) return null;
+      await prisma.turuuChat.update({ where: { id: chatRecord.id }, data: { aiPaused: false } });
+    }
     if (chatRecord?.handoffRequested) {
       const elapsed = chatRecord.handoffAt ? Date.now() - new Date(chatRecord.handoffAt).getTime() : Infinity;
       if (elapsed < 10 * 60 * 1000) return null; // 10 минут болоогүй — AI хариулахгүй
