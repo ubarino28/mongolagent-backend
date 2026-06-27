@@ -286,6 +286,7 @@ model Store {
   status       String   @default("draft") // draft | published
   templateId   String?                    // сонгосон template
   theme        Json     @default("{}")    // өнгө, фонт, лого г.м
+  layout       Json     @default("{}")    // дэлгүүрийн түвшний header/footer тохиргоо (Shopify шиг global)
   currency     String   @default("MNT")
   phone        String?                     // footer холбоо барих
   email        String?
