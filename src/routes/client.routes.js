@@ -2085,13 +2085,26 @@ router.post("/upload/excel", excelUpload.single("file"), handleExcelUploadError,
     const productKB = currentKB.filter((k) => k.category?.startsWith(PRODUCT_PREFIX));
 
     // Тус бүрд одоо байгаа бараатай таарч байгаа эсэхийг тодорхойлно (нэрийн дагуу, 60%+ ижил бол шинэчлэх)
+    // Группуудыг хамгийн өндөр score-той нь ЭХЛЭЭД боловсруулна — нэг KB item-ийг ЗӨВХӨН НЭГ удаа claim хийнэ
+    // (хоёр өөр бараа ижил KB item-д давхар update хийж нэг нь нөгөөгөө дарахаас сэргийлнэ)
+    const scored = [];
     for (const g of groups.values()) {
       let bestMatch = null, bestScore = 0;
       for (const kb of productKB) {
         const score = productSimilarity(g.name, kb.question);
         if (score > bestScore) { bestScore = score; bestMatch = kb; }
       }
-      g.bestMatch = bestScore >= 0.6 ? bestMatch : null;
+      scored.push({ g, bestMatch, bestScore });
+    }
+    scored.sort((a, b) => b.bestScore - a.bestScore);
+    const claimedKbIds = new Set();
+    for (const s of scored) {
+      if (s.bestScore >= 0.6 && s.bestMatch && !claimedKbIds.has(s.bestMatch.id)) {
+        s.g.bestMatch = s.bestMatch;
+        claimedKbIds.add(s.bestMatch.id);
+      } else {
+        s.g.bestMatch = null; // claim хийгдсэн эсвэл доогуур score — шинээр үүсгэнэ
+      }
     }
 
     // "Ангилал" хоосон, шинээр үүсгэх бараануудыг AI-аар дэд ангилалд хуваарилна
