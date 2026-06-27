@@ -3,7 +3,12 @@ require("dotenv").config();
 const app = require("./app");
 const { startDomainHealthLoop } = require("./services/domainHealth.service");
 const { startReconciliation } = require("./services/reconcile.service");
+const { captureException } = require("./lib/sentry");
 const { getPrisma } = require("./lib/db");
+
+// Баригдаагүй алдаануудыг Sentry-д бүртгэнэ (процессыг унагаахгүй)
+process.on("unhandledRejection", (reason) => { console.error("[unhandledRejection]", reason); captureException(reason instanceof Error ? reason : new Error(String(reason))); });
+process.on("uncaughtException", (err) => { console.error("[uncaughtException]", err); captureException(err); });
 
 const PORT = process.env.PORT || 3001;
 

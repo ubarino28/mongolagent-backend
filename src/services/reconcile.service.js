@@ -11,7 +11,7 @@ const vdomains = require("./vercelDomains.service");
 const vercel = require("./vercel.service");
 
 function isPaid(r) {
-  return r && (r.invoice_status === "PAID" || (r.count != null && r.count > 0) || r.payment_status === "PAID");
+  return !!(r && (r.invoice_status === "PAID" || (r.count != null && r.count > 0) || r.payment_status === "PAID"));
 }
 
 async function runReconciliation(prisma) {
@@ -67,4 +67,4 @@ function startReconciliation(prisma, intervalMs = 5 * 60 * 1000) {
   return t;
 }
 
-module.exports = { runReconciliation, startReconciliation };
+module.exports = { runReconciliation, startReconciliation, isPaid };

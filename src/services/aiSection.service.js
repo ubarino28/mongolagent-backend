@@ -99,4 +99,4 @@ async function generateSections(prompt) {
   return blocks;
 }
 
-module.exports = { generateSections };
+module.exports = { generateSections, sanitizeBlock };

@@ -1,6 +1,10 @@
 "use strict";
 require("dotenv").config();
 
+// Sentry-г аль болох эрт эхлүүлнэ (DSN байхгүй бол no-op)
+const { initSentry, captureException } = require("./lib/sentry");
+initSentry();
+
 // Аюулгүй байдал: JWT_SECRET заавал тохируулсан байх ёстой (hardcode fallback байхгүй)
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
   console.error("[FATAL] JWT_SECRET env тохируулаагүй эсвэл хэт богино (>=16 тэмдэгт). Сервер аюулгүй ажиллах боломжгүй.");
@@ -130,5 +134,14 @@ app.use("/client", clientRouter);
 app.use("/store", storeRouter);
 // Storefront нь нийтийн — custom домэйн дээрх дэлгүүрүүд ч хандах тул бүх origin зөвшөөрнө
 app.use("/storefront", cors({ origin: true }), storefrontRouter);
+
+// Сүүлчийн алдаа баригч — Sentry-д илгээж, цэвэр 500 буцаана
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  captureException(err, { path: req.originalUrl, method: req.method });
+  console.error("[error]", req.method, req.originalUrl, "-", err.message);
+  if (res.headersSent) return;
+  res.status(err.status || 500).json({ error: "Серверийн алдаа гарлаа" });
+});
 
 module.exports = app;
