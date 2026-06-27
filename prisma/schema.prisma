@@ -91,6 +91,7 @@ model TuruuChat {
   psid             String
   orgId            String?
   messages         Json     @default("[]")
+  platform         String   @default("facebook")
   blocked          Boolean  @default(false)
   aiPaused         Boolean  @default(false)
   handoffRequested Boolean   @default(false)

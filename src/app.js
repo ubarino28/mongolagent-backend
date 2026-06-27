@@ -83,6 +83,9 @@ const { getPrisma } = require("./lib/db");
     await prisma.$executeRawUnsafe(
       `ALTER TABLE "TuruuChat" ADD COLUMN IF NOT EXISTS "aiPaused" BOOLEAN DEFAULT false`
     );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "TuruuChat" ADD COLUMN IF NOT EXISTS "platform" TEXT DEFAULT 'facebook'`
+    );
   } catch (e) {
     console.warn("[migration]", e.message);
   }
