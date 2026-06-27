@@ -274,6 +274,19 @@ router.put("/conversations/:psid/block", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// PUT /client/conversations/ai-pause-all — Бүх чатын AI унтраах/асаах
+router.put("/conversations/ai-pause-all", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const paused = !!req.body.paused;
+    const result = await prisma.turuuChat.updateMany({
+      where: { orgId: req.org.orgId },
+      data: { aiPaused: paused },
+    });
+    res.json({ ok: true, aiPaused: paused, updated: result.count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // PUT /client/conversations/:psid/ai-pause — AI түр унтраах/асаах
 router.put("/conversations/:psid/ai-pause", async (req, res) => {
   try {
