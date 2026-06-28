@@ -85,6 +85,7 @@ router.get("/site", async (req, res) => {
         name: store.name,
         slug: store.slug,
         theme: store.theme,
+        layout: store.layout || {},
         currency: store.currency,
         templateId: store.templateId,
         phone: store.phone,

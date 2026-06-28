@@ -163,7 +163,7 @@ router.post("/", async (req, res) => {
 // PUT /store — дэлгүүрийн тохиргоо шинэчлэх (нэр, theme, slug, домэйн)
 router.put("/", async (req, res) => {
   try {
-    const { name, theme, slug, customDomain, templateId, currency, phone, email, address, delivery } = req.body;
+    const { name, theme, layout, slug, customDomain, templateId, currency, phone, email, address, delivery } = req.body;
     const prisma = getPrisma();
 
     const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId } });
@@ -172,6 +172,7 @@ router.put("/", async (req, res) => {
     const data = {};
     if (name !== undefined) data.name = name;
     if (theme !== undefined) data.theme = theme;
+    if (layout !== undefined) data.layout = layout || {};
     if (templateId !== undefined) data.templateId = templateId;
     if (currency !== undefined) data.currency = currency;
     if (phone !== undefined) data.phone = phone || null;
