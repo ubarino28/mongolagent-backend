@@ -1699,8 +1699,11 @@ router.post("/chat", async (req, res) => {
               result = scored.map((s, idx) => {
                 let text = `А: ${s.item.question}\nХ: ${s.item.answer}`;
                 const vars = Array.isArray(s.item.variants) ? s.item.variants : [];
-                const colors = [...new Set(vars.filter((v) => v.color && (v.stock == null || v.stock > 0)).map((v) => v.color))];
+                const inStock = vars.filter((v) => v.stock == null || v.stock > 0);
+                const colors = [...new Set(inStock.filter((v) => v.color).map((v) => v.color))];
                 if (colors.length > 0) text += `\nБайгаа өнгөнүүд: ${colors.join(", ")}`;
+                const sizes = [...new Set(inStock.filter((v) => v.size).map((v) => v.size))];
+                if (sizes.length > 0) text += `\nБайгаа размерүүд: ${sizes.join(", ")}`;
                 const colorsWithImages = [...new Set(vars.filter((v) => v.color && v.imageUrl).map((v) => v.color))];
                 if (colorsWithImages.length > 0) text += `\nЗурагтай өнгөнүүд: ${colorsWithImages.join(", ")}`;
                 // Хайлтын query-д дурдсан өнгөтэй variant-ын зургийг тэргүүлж сонгоно, тохирохгүй бол top result-ийн ерөнхий imageUrl

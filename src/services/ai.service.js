@@ -334,7 +334,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "check_menu",
-      description: "Ресторанын менюгийн жагсаалтыг авна — хоолны нэр, ангилал, үнэ, порц.",
+      description: "Бүх бараа/бүтээгдэхүүний жагсаалтыг ангилалаар нь авна. Хэрэглэгч 'ямар бараа байна?', 'юу зардаг вэ?', 'бараагаа харуулаач', 'меню юу байна?' гэх мэт ЕРӨНХИЙ асуулт асуувал дуудна.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -737,18 +737,19 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
             orderBy: { category: "asc" },
           });
           if (kbItems.length === 0) {
-            toolResults.push({ tool_call_id: toolCall.id, content: "Меню хоосон байна." });
+            toolResults.push({ tool_call_id: toolCall.id, content: "Одоогоор бүртгэлтэй бараа алга." });
           } else {
-            const menu = kbItems.map((item) => {
-              let line = `${item.question} (${(item.category || "").replace("Бүтээгдэхүүн / ", "")}) — ${item.answer}`;
-              const vars = Array.isArray(item.variants) ? item.variants : [];
-              if (vars.length > 0) {
-                const varStr = vars.map((v) => `${[v.size, v.color].filter(Boolean).join("/")}: ${(v.stock ?? 0) > 0 ? "байгаа" : "дууссан"}`).join(", ");
-                line += ` | ${varStr}`;
-              }
-              return line;
-            }).join("\n");
-            toolResults.push({ tool_call_id: toolCall.id, content: menu });
+            // Ангилалаар бүлэглэнэ — хэрэглэгчид цэгцтэй танилцуулна
+            const byCat = {};
+            for (const item of kbItems) {
+              const cat = (item.category || "").replace("Бүтээгдэхүүн / ", "").replace("Бүтээгдэхүүн", "Бусад") || "Бусад";
+              if (!byCat[cat]) byCat[cat] = [];
+              const price = (item.answer.match(/Үнэ:\s*([\d,]+)/) || [])[1];
+              byCat[cat].push(`${item.question}${price ? ` — ${price}₮` : ""}`);
+            }
+            const categories = Object.keys(byCat);
+            const menu = categories.map((cat) => `【${cat}】\n${byCat[cat].join("\n")}`).join("\n\n");
+            toolResults.push({ tool_call_id: toolCall.id, content: `Ангилалууд: ${categories.join(", ")}\n\n${menu}` });
           }
         } catch {
           toolResults.push({ tool_call_id: toolCall.id, content: "Меню авахад алдаа гарлаа." });
