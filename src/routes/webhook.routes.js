@@ -337,6 +337,35 @@ router.post("/sub-qpay/:orgId", async (req, res) => {
   });
 });
 
+// Template purchase QPay callback — POST /webhook/template-qpay/:orgId/:templateId
+router.post("/template-qpay/:orgId/:templateId", async (req, res) => {
+  res.json({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      const prisma = getPrisma();
+      const { orgId, templateId } = req.params;
+      const purchase = await prisma.templatePurchase.findUnique({
+        where: { orgId_templateId: { orgId, templateId } },
+      });
+      if (!purchase?.invoiceId || purchase.status === "PAID") return;
+
+      const subQpay = require("../services/subscription-qpay.service");
+      const result = await subQpay.checkPayment(purchase.invoiceId);
+      const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID" || result.invoice_status === "PAID";
+      if (!paid) return;
+
+      await prisma.templatePurchase.update({
+        where: { orgId_templateId: { orgId, templateId } },
+        data: { status: "PAID" },
+      });
+      console.log(`[TemplateQPay] Org ${orgId} purchased template ${templateId}`);
+    } catch (err) {
+      console.error("[TemplateQPay callback]", err.message);
+    }
+  });
+});
+
 // Website wallet topup QPay callback — POST /webhook/web-wallet/:orgId
 router.post("/web-wallet/:orgId", async (req, res) => {
   res.json({ ok: true });

@@ -37,6 +37,22 @@ model Organization {
   orders TuruuOrder[]
   store  Store?
   staff  StaffMember[]
+  templatePurchases TemplatePurchase[]
+}
+
+// Загвар (template) худалдан авалт — orgId+templateId-аар нэг л бичлэг, PAID бол эзэмшсэн
+model TemplatePurchase {
+  id         String   @id @default(uuid())
+  orgId      String
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  templateId String
+  status     String   @default("PENDING") // PENDING | PAID
+  invoiceId  String?
+  amount     Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([orgId, templateId])
 }
 
 model StaffMember {

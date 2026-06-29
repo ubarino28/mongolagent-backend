@@ -66,6 +66,64 @@ const INFO_CARDS = {
 };
 
 const TEMPLATES = [
+  // ── 0. Minimal — анхдагч (үнэгүй), Apple маягийн цэвэрхэн загвар ──────────
+  {
+    id: "minimal",
+    name: "Minimal",
+    description: "Apple маягийн цэвэрхэн, энгийн загвар. Их зайтай, том гарчигтай, аль ч төрлийн бараанд тохирно.",
+    category: "Үндсэн",
+    preview: "minimal",
+    price: 0,
+    isFree: true,
+    // Анхдагч цагаан background + хар accent. Section текст нь background-аас хамаараад авто тохирно.
+    theme: { primaryColor: "#111111", bgColor: "#ffffff", textColor: "#111111", font: "Inter" },
+    pages: homePage({
+      root: { props: { title: "Нүүр" } },
+      content: [
+        // Hero — зураггүй, том төвлөрсөн текст, theme background ашиглана (adaptive текст)
+        { type: "Hero", props: {
+          id: "hero", heading: "Энгийн. Гоё. Чанартай.", subheading: "Хамгийн шилдэг бүтээгдэхүүнийг танд цэвэрхэн, тав тухтай туршлагаар хүргэнэ.",
+          ctaText: "Дэлгүүр үзэх", ctaHref: "#products", align: "center", height: "lg", headingSize: "xl"
+        }},
+
+        // Онцлох бараа — тансаг зай, дугуй булан
+        { type: "ProductGrid", props: { id: "products", heading: "Онцлох бараа", columns: "3", limit: 6, gap: "lg", cardRadius: "md", pad: "lg" } },
+
+        // Брэндийн философи
+        { type: "ImageText", props: {
+          id: "story", heading: "Бидний философи", text: "Бид цөөн ч чанартай. Илүүдэлгүй, цэвэрхэн дизайн, найдвартай үйлчилгээгээр та бүхэндээ үнэ цэнийг хүргэхийг эрхэмлэдэг.",
+          image: unsplash("1441986300917-64674bd600d8", 800, 600), imagePosition: "right",
+          radius: "lg", ratio: "4/3", align: "left"
+        }},
+
+        // Давуу тал
+        { type: "Features", props: {
+          id: "feat", heading: "Яагаад бид гэж?", columns: "3", gap: "lg", align: "center",
+          items: [
+            { title: "Чанарын баталгаа", text: "Сонгомол, шалгасан бараа.", icon: "shield" },
+            { title: "Хурдан хүргэлт", text: "Улаанбаатарт 24-48 цагт.", icon: "truck" },
+            { title: "Найдвартай төлбөр", text: "QPay-ээр аюулгүй төлнө.", icon: "zap" },
+          ]
+        }},
+
+        // Newsletter
+        { type: "Newsletter", props: {
+          id: "nl", heading: "Шинэ бараа, хямдралын мэдээг түрүүлж аваарай",
+          text: "Имэйлээ үлдээгээд онцгой саналуудыг хамгийн түрүүнд хүлээн аваарай.",
+          buttonText: "Бүртгүүлэх", align: "center"
+        }},
+      ],
+    }),
+    demoProducts: [
+      { name: "Сонгомол цүнх", price: 89000, description: "Энгийн, гоё загварын өдөр тутмын цүнх.", images: [unsplash("1553062407-98d43420e9e7", 600, 800)] },
+      { name: "Минимал цаг", price: 159000, compareAtPrice: 199000, description: "Цэвэрхэн загварын гар цаг.", images: [unsplash("1523275335684-37898b6baf30", 600, 800)] },
+      { name: "Арьсан хэтэвч", price: 49000, description: "Жижиг, чанартай арьсан хэтэвч.", images: [unsplash("1627123424574-724758594e93", 600, 800)] },
+      { name: "Нарны шил", price: 79000, description: "Орчин үеийн загварын нарны шил.", images: [unsplash("1572635196237-14b3f281503f", 600, 800)] },
+      { name: "Чихэвч", price: 129000, description: "Утасгүй, чимээ тусгаарлагчтай чихэвч.", images: [unsplash("1505740420928-5e560c06d30e", 600, 800)] },
+      { name: "Керамик аяга", price: 29000, description: "Гар хийцийн керамик аяга.", images: [unsplash("1514228742587-6b1558fcca3d", 600, 800)] },
+    ],
+  },
+
   // ── 1. Power — Gymshark-inspired фитнесс / спорт хувцас ──────────
   {
     id: "power",
@@ -73,6 +131,8 @@ const TEMPLATES = [
     description: "Gymshark-аас сэдэвлэсэн спорт хувцасны дэлгүүр. Хүчирхэг, хар өнгөний загвар.",
     category: "Спорт хувцас",
     preview: "zagvar1",
+    price: 49000,
+    isFree: false,
     theme: { primaryColor: "#111111", bgColor: "#ffffff", textColor: "#111111", font: "Inter" },
     pages: homePage({
       root: { props: { title: "Нүүр" } },
@@ -182,7 +242,11 @@ const TEMPLATES = [
 ];
 
 function listTemplates() {
-  return TEMPLATES.map(({ id, name, description, category, theme, preview }) => ({ id, name, description, category, theme, preview }));
+  return TEMPLATES.map(({ id, name, description, category, theme, preview, price, isFree }) => ({
+    id, name, description, category, theme, preview,
+    price: price || 0,
+    isFree: isFree ?? (price || 0) === 0,
+  }));
 }
 
 function getTemplate(id) {

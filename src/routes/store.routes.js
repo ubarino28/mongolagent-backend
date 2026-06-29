@@ -72,9 +72,101 @@ router.use((req, res, next) => {
 
 // ─── Templates ────────────────────────────────────────────────────────────────
 
-// GET /store/templates — боломжит template-ууд
-router.get("/templates", (req, res) => {
-  res.json({ templates: listTemplates() });
+// Тухайн org-ийн эзэмшсэн (PAID) template id-уудын Set
+async function ownedTemplateIds(prisma, orgId) {
+  const rows = await prisma.templatePurchase.findMany({
+    where: { orgId, status: "PAID" },
+    select: { templateId: true },
+  });
+  return new Set(rows.map((r) => r.templateId));
+}
+
+// GET /store/templates — боломжит template-ууд (эзэмшил/түгжээний төлөвтэй)
+router.get("/templates", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const owned = await ownedTemplateIds(prisma, req.org.orgId);
+    const templates = listTemplates().map((t) => {
+      const isOwned = t.isFree || owned.has(t.id);
+      return { ...t, owned: isOwned, locked: !isOwned };
+    });
+    res.json({ templates });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Загварыг хэрэглэхийг зөвшөөрөх эсэх (үнэгүй эсвэл эзэмшсэн байх ёстой)
+async function assertTemplateAllowed(prisma, orgId, templateId) {
+  const tpl = getTemplate(templateId);
+  if (!tpl) return { ok: false, code: 400, error: "Загвар олдсонгүй" };
+  const isFree = tpl.isFree ?? (tpl.price || 0) === 0;
+  if (isFree) return { ok: true, tpl };
+  const purchase = await prisma.templatePurchase.findUnique({
+    where: { orgId_templateId: { orgId, templateId } },
+  });
+  if (purchase?.status === "PAID") return { ok: true, tpl };
+  return { ok: false, code: 402, error: "Энэ загварыг ашиглахын тулд эхлээд худалдаж авна уу" };
+}
+
+// POST /store/templates/:id/purchase — загвар худалдан авах QPay invoice үүсгэх
+router.post("/templates/:id/purchase", async (req, res) => {
+  try {
+    const templateId = req.params.id;
+    const tpl = getTemplate(templateId);
+    if (!tpl) return res.status(400).json({ error: "Загвар олдсонгүй" });
+    const isFree = tpl.isFree ?? (tpl.price || 0) === 0;
+    if (isFree) return res.status(400).json({ error: "Энэ загвар үнэгүй — худалдан авах шаардлагагүй" });
+
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+
+    // Аль хэдийн эзэмшсэн бол
+    const existing = await prisma.templatePurchase.findUnique({
+      where: { orgId_templateId: { orgId, templateId } },
+    });
+    if (existing?.status === "PAID") {
+      return res.json({ ok: true, owned: true });
+    }
+    // Хүлээгдэж буй invoice байвал дахин ашиглах боломжтой — гэхдээ шинээр үүсгэе (хуучин QR хүчинтэй хэвээр)
+    const result = await platformQpay.createInvoice({
+      orgId,
+      plan: `template:${templateId}`,
+      amount: tpl.price,
+      description: `Mongol Agent — "${tpl.name}" загвар`,
+      callbackUrl: `${process.env.API_URL || "https://api.mongolagent.mn"}/webhook/template-qpay/${orgId}/${templateId}`,
+    });
+
+    await prisma.templatePurchase.upsert({
+      where: { orgId_templateId: { orgId, templateId } },
+      create: { orgId, templateId, status: "PENDING", invoiceId: result.invoice_id, amount: tpl.price },
+      update: { status: "PENDING", invoiceId: result.invoice_id, amount: tpl.price },
+    });
+
+    res.json({ ok: true, invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /store/templates/:id/purchase/check — загварын төлбөр шалгах
+router.post("/templates/:id/purchase/check", async (req, res) => {
+  try {
+    const templateId = req.params.id;
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const purchase = await prisma.templatePurchase.findUnique({
+      where: { orgId_templateId: { orgId, templateId } },
+    });
+    if (!purchase?.invoiceId) return res.status(400).json({ error: "Invoice байхгүй" });
+    if (purchase.status === "PAID") return res.json({ paid: true });
+
+    const result = await platformQpay.checkPayment(purchase.invoiceId);
+    const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID" || result.invoice_status === "PAID";
+    if (paid) {
+      await prisma.templatePurchase.update({
+        where: { orgId_templateId: { orgId, templateId } },
+        data: { status: "PAID" },
+      });
+    }
+    res.json({ paid });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── Store ──────────────────────────────────────────────────────────────────
@@ -94,26 +186,31 @@ router.get("/", async (req, res) => {
 // POST /store — дэлгүүр үүсгэх (template-ээс seed хийнэ). Аль хэдийн байвал буцаана.
 router.post("/", async (req, res) => {
   try {
-    const { name, templateId, slug } = req.body;
+    const { name, templateId, slug, theme: themeOverride } = req.body;
     const prisma = getPrisma();
 
     const existing = await prisma.store.findUnique({ where: { orgId: req.org.orgId } });
     if (existing) return res.status(409).json({ error: "Дэлгүүр аль хэдийн үүссэн байна", store: existing });
 
-    const template = templateId ? getTemplate(templateId) : null;
+    // templateId өгөөгүй бол анхдагч "minimal" (үнэгүй) загвар. Төлбөртэй загварыг эзэмшээгүй бол хориглоно.
+    const wantTemplate = templateId || "minimal";
+    const allow = await assertTemplateAllowed(prisma, req.org.orgId, wantTemplate);
+    if (!allow.ok) return res.status(allow.code).json({ error: allow.error });
+    const template = allow.tpl;
     const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { slug: true, name: true } });
 
     // Домэйн (subdomain)-г дэлгүүрийн нэрнээс үүсгэнэ (жишээ: "Inca" → inca.mongolagent.mn).
     // Хэрэглэгч тусгай slug дамжуулсан бол түүнийг, эс бөгөөс нэрийг, эцэст нь org slug-г ашиглана.
     const storeSlug = await uniqueStoreSlug(prisma, slug || name || org?.slug || req.org.slug, null);
-    const theme = template?.theme || {};
+    // template-ийн theme дээр onboarding-оос ирсэн өнгийг (bgColor/primaryColor/textColor) давхарлана
+    const theme = { ...(template?.theme || {}), ...(themeOverride && typeof themeOverride === "object" ? themeOverride : {}) };
 
     const store = await prisma.store.create({
       data: {
         orgId: req.org.orgId,
         name: name || org?.name || "Миний дэлгүүр",
         slug: storeSlug,
-        templateId: templateId || null,
+        templateId: wantTemplate,
         theme,
         status: "published",
         publishedAt: new Date(),
@@ -244,10 +341,11 @@ router.delete("/", async (req, res) => {
 router.post("/apply-template", async (req, res) => {
   try {
     const { templateId } = req.body;
-    const template = getTemplate(templateId);
-    if (!template) return res.status(400).json({ error: "Загвар олдсонгүй" });
-
     const prisma = getPrisma();
+    const allow = await assertTemplateAllowed(prisma, req.org.orgId, templateId);
+    if (!allow.ok) return res.status(allow.code).json({ error: allow.error });
+    const template = allow.tpl;
+
     const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId } });
     if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
 
