@@ -1861,6 +1861,41 @@ router.get("/profile", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /client/setup-status — AI бүрэн ажиллахад шаардлагатай алхмуудын төлөв (checklist)
+router.get("/setup-status", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const [org, aiSettings, btSetting, productsCount, knowledgeCount, staffCount] = await Promise.all([
+      prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { fbPageId: true, qpayMerchantId: true, qpayAccountNumber: true },
+      }),
+      prisma.turuuSettings.findMany({
+        where: { orgId, key: { in: ["ai_profile", "system_prompt", "ai_company"] } },
+        select: { value: true },
+      }),
+      prisma.turuuSettings.findUnique({ where: { orgId_key: { orgId, key: "business_type" } }, select: { value: true } }),
+      // Бараа/меню = "Бүтээгдэхүүн" ангиллын KB зүйл (check_menu-тэй ижил шалгуур)
+      prisma.turuuKnowledge.count({ where: { orgId, active: true, category: { startsWith: "Бүтээгдэхүүн" } } }),
+      // Нийт KB (business_type=other-д ашиглана)
+      prisma.turuuKnowledge.count({ where: { orgId, active: true } }),
+      // Бүртгэлтэй эмч/мастер/ажилтан (цаг захиалгатай бизнест ашиглана)
+      prisma.turuuStaff.count({ where: { orgId, isActive: true } }),
+    ]);
+    const aiConfigured = aiSettings.some((s) => s.value && s.value.trim().length > 0);
+    res.json({
+      businessType: btSetting?.value || null,
+      aiConfigured,
+      facebookConnected: !!org?.fbPageId,
+      qpayConnected: !!(org?.qpayMerchantId && org?.qpayAccountNumber),
+      productsCount,
+      knowledgeCount,
+      staffCount,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // PUT /client/profile/facebook
 router.put("/profile/facebook", async (req, res) => {
   try {
