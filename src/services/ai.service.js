@@ -207,6 +207,7 @@ const TOOLS = [
           },
           totalAmount: { type: "number" },
           notes:       { type: "string" },
+          payOnPickup: { type: "boolean", description: "Хэрэглэгч очиж авахдаа (дэлгүүр дээр) төлбөрөө төлнө гэвэл true. Энэ тохиолдолд QPay холбоос үүсгэхгүй." },
         },
         required: ["customerName", "customerPhone", "items", "totalAmount"],
       },
@@ -574,8 +575,9 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
 
         // QPay auto-invoice: org-д merchant + данс тохируулсан бол автоматаар QR үүсгэнэ
         // (давтан дуудсан захиалга бол дахин invoice үүсгэхгүй — аль хэдийн явуулсан)
+        // payOnPickup бол QPay огт үүсгэхгүй — хэрэглэгч дэлгүүр дээр төлнө
         let qpayInfo = null;
-        if (orgId && order?.id && !order.duplicate) {
+        if (orgId && order?.id && !order.duplicate && !args.payOnPickup) {
           try {
             const org = await prisma.organization.findUnique({
               where: { id: orgId },

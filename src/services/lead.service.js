@@ -46,8 +46,14 @@ async function notifyTelegram(title, data, botToken, chatId) {
     .catch((err) => console.error("[TG] notify error:", err.message));
 }
 
-async function saveOrder({ psid, orgId = null, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes }) {
+async function saveOrder({ psid, orgId = null, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes, payOnPickup = false }) {
   const prisma = getPrisma();
+
+  // Очиж авахдаа төлнө — notes-д тэмдэглэж эзэнд (dashboard + Telegram) харагдуулна
+  if (payOnPickup) {
+    const suffix = "Очиж авахдаа төлнө";
+    notes = notes ? `${notes} | ${suffix}` : suffix;
+  }
 
   // Idempotency: AI ижил захиалгад save_order-ыг давтан дуудвал (жишээ нь "дансаар төлье" гэсний дараа)
   // сүүлийн 30 минутад ижил psid+totalAmount-тай NEW захиалга байгаа бол давтахгүй
