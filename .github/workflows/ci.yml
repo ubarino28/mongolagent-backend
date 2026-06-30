@@ -1,0 +1,36 @@
+name: CI
+
+# master руу нэгдэхийн өмнө кодыг автоматаар шалгана.
+# PR дээр ногоон болохгүй бол merge хийхгүй (branch protection-той хослоно).
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # prisma generate болон тест зөвхөн schema уншина — бодит DB-д холбогдохгүй.
+      # (жинхэнэ нууцыг CI-д хэзээ ч битгий тавь — энэ зүгээр placeholder)
+      DATABASE_URL: "postgresql://ci:ci@localhost:5432/ci?schema=public"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Хамаарал суулгах
+        run: npm ci
+
+      - name: Syntax шалгалт (бүх JS файл)
+        run: |
+          set -e
+          find src test -name '*.js' -print0 | xargs -0 -n1 node --check
+          echo "✅ Бүх файл syntax зөв"
+
+      - name: Unit тестүүд
+        run: node --test
