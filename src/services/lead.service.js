@@ -1,6 +1,7 @@
 "use strict";
 const { getPrisma } = require("../lib/db");
 const axios = require("axios");
+const { decrypt } = require("../lib/secretCrypto");
 
 // AI tool-аас ирэх мөрийг хязгаарлана — урт payload-оор DB bloat хийхээс сэргийлнэ
 const C = (s, n = 200) => (typeof s === "string" ? s.slice(0, n) : s);
@@ -34,7 +35,7 @@ async function getTelegramConfig(orgId) {
       const prisma = getPrisma();
       const org = await prisma.organization.findUnique({ where: { id: orgId } });
       if (org?.telegramBotToken && org?.telegramChatId) {
-        return { botToken: org.telegramBotToken, chatId: org.telegramChatId };
+        return { botToken: decrypt(org.telegramBotToken), chatId: decrypt(org.telegramChatId) };
       }
     }
   } catch { /* fallback */ }

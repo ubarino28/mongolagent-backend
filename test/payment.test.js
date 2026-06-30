@@ -1,7 +1,7 @@
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert");
-const { markStoreOrderPaid } = require("../src/services/payment.service");
+const { markStoreOrderPaid, applySubscriptionPayment } = require("../src/services/payment.service");
 
 // updateMany count===1 (анхны шилжилт) → true, нөөц хасах оролдоно
 test("markStoreOrderPaid анхны PENDING→PAID шилжилтэд true буцаана", async () => {
@@ -40,4 +40,44 @@ test("markStoreOrderPaid купонгүй бол discount.updateMany дууда�
   const ok = await markStoreOrderPaid(prisma, { id: "o1", storeId: "s1", discountCode: null, items: [] });
   assert.strictEqual(ok, true);
   assert.strictEqual(discountCalled, false);
+});
+
+// C1 fix — applySubscriptionPayment нь эрхийг 30 хоног сунгаж, идемпотент байх ёстой.
+// (webhook болон polling-check ЭНЭ shared helper-ийг дуудна — өмнө polling сунгадаггүй
+//  байсан тул төлсөн ч эрх гацдаг байсан.)
+test("applySubscriptionPayment count===1 үед эрхийг ~30 хоног сунгана", async () => {
+  let written = null;
+  const prisma = { organization: { updateMany: async ({ data }) => { written = data; return { count: 1 }; } } };
+  const now = Date.now();
+  const { applied, subscriptionEndsAt } = await applySubscriptionPayment(prisma, { id: "org1", subInvoiceId: "inv1", subscriptionEndsAt: null });
+  assert.strictEqual(applied, true);
+  // ~30 хоног (±1 цаг тэвчинэ)
+  const diffDays = (subscriptionEndsAt.getTime() - now) / (24 * 60 * 60 * 1000);
+  assert.ok(Math.abs(diffDays - 30) < 0.05, `30 хоног байх ёстой, гарсан: ${diffDays}`);
+  assert.strictEqual(written.subQpayStatus, "PAID");
+  assert.strictEqual(written.status, "active");
+  assert.strictEqual(written.subInvoiceId, null); // давхар сунгахаас сэргийлж цэвэрлэнэ
+});
+
+// Идемпотент: count===0 (webhook аль хэдийн боловсруулсан) бол applied=false
+test("applySubscriptionPayment давхар дуудлагад applied=false (идемпотент)", async () => {
+  const prisma = { organization: { updateMany: async () => ({ count: 0 }) } };
+  const { applied } = await applySubscriptionPayment(prisma, { id: "org1", subInvoiceId: "inv1", subscriptionEndsAt: null });
+  assert.strictEqual(applied, false);
+});
+
+// Үлдсэн хугацаан дээр нэмж стэклэнэ (идэвхтэй эрхийг эрт сунгавал хохирохгүй)
+test("applySubscriptionPayment идэвхтэй эрхийн ҮЛДЭГДЭЛ дээр нэмнэ", async () => {
+  const prisma = { organization: { updateMany: async () => ({ count: 1 }) } };
+  const future = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000); // 10 хоног үлдсэн
+  const { subscriptionEndsAt } = await applySubscriptionPayment(prisma, { id: "org1", subInvoiceId: "inv1", subscriptionEndsAt: future });
+  const diffDays = (subscriptionEndsAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+  assert.ok(Math.abs(diffDays - 40) < 0.05, `40 хоног (10 үлдэгдэл + 30) байх ёстой, гарсан: ${diffDays}`);
+});
+
+// subInvoiceId байхгүй бол applied=false (хамгаалалт)
+test("applySubscriptionPayment subInvoiceId-гүй бол applied=false", async () => {
+  const prisma = { organization: { updateMany: async () => ({ count: 1 }) } };
+  const { applied } = await applySubscriptionPayment(prisma, { id: "org1", subInvoiceId: null });
+  assert.strictEqual(applied, false);
 });

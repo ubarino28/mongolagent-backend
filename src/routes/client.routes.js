@@ -9,6 +9,8 @@ const { createClient } = require("@supabase/supabase-js");
 const { getPrisma } = require("../lib/db");
 const { clientAuthMiddleware } = require("../middleware/clientAuth");
 const { sendText } = require("../services/facebook.service");
+const { applySubscriptionPayment } = require("../services/payment.service");
+const { encrypt, decrypt } = require("../lib/secretCrypto");
 
 const router = express.Router();
 
@@ -34,13 +36,36 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_EMAIL = process.env.FROM_EMAIL || "noreply@mongolagent.mn";
 const FB_CALLBACK = `${API_URL}/client/profile/facebook/callback`;
 
+// Facebook OAuth state-ийг HMAC-аар гарын үсэг зурж/баталгаажуулна.
+// (өмнө state нь зүгээр base64(JSON{orgId}) байсан тул халдагч дурын orgId-той state
+//  зохиож callback дуудах боломжтой байсан — CSRF/буруу tenant-д холбох эрсдэл.)
+const FB_STATE_SECRET = process.env.FB_STATE_SECRET || process.env.JWT_SECRET || "fb-oauth-state";
+function signFbState(payload) {
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const sig = crypto.createHmac("sha256", FB_STATE_SECRET).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+function verifyFbState(state) {
+  const [body, sig] = String(state || "").split(".");
+  if (!body || !sig) return null;
+  const expected = crypto.createHmac("sha256", FB_STATE_SECRET).update(body).digest("base64url");
+  const a = Buffer.from(sig), b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try { return JSON.parse(Buffer.from(body, "base64url").toString()); } catch { return null; }
+}
+
 // Facebook OAuth callback — auth middleware байхгүй (Facebook-аас ирдэг)
 router.get("/profile/facebook/callback", async (req, res) => {
   const { code, state } = req.query;
   if (!code || !state) return res.redirect(`${FRONTEND_URL}/profile?fb_error=true`);
 
   try {
-    const { orgId } = JSON.parse(Buffer.from(String(state), "base64").toString());
+    const parsed = verifyFbState(state);
+    if (!parsed?.orgId || (parsed.ts && Date.now() - parsed.ts > 15 * 60 * 1000)) {
+      console.error("[FB OAuth] state баталгаажсангүй (хүчингүй эсвэл хугацаа дууссан)");
+      return res.redirect(`${FRONTEND_URL}/profile?fb_error=true`);
+    }
+    const { orgId } = parsed;
 
     const tokenRes = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", {
       params: {
@@ -82,7 +107,7 @@ router.use(clientAuthMiddleware);
 
 // GET /client/profile/facebook/auth-url
 router.get("/profile/facebook/auth-url", (req, res) => {
-  const state = Buffer.from(JSON.stringify({ orgId: req.org.orgId })).toString("base64");
+  const state = signFbState({ orgId: req.org.orgId, ts: Date.now() });
   const scope = [
     "pages_messaging",
     "pages_show_list",
@@ -98,12 +123,28 @@ router.post("/profile/facebook/select-page", async (req, res) => {
   try {
     const { pageId, pageName, pageToken, instagramId } = req.body;
     if (!pageId || !pageToken) return res.status(400).json({ error: "pageId, pageToken шаардлагатай" });
+
+    // Page эзэмшил баталгаажуулна — дамжуулсан pageToken тухайн pageId-г ҮНЭХЭЭР удирддаг эсэх.
+    // (өмнө client-ийн дамжуулсан pageId/pageToken-д шууд итгэдэг байсан тул хортой хэрэглэгч
+    //  өөр хүний Page ID-г булааж webhook урсгалыг өөр луугаа татах боломжтой байсан.)
+    try {
+      const me = await axios.get("https://graph.facebook.com/v19.0/me", {
+        params: { access_token: pageToken, fields: "id" },
+      });
+      if (!me.data?.id || String(me.data.id) !== String(pageId)) {
+        return res.status(403).json({ error: "Page token энэ хуудсанд тохирохгүй байна" });
+      }
+    } catch (verr) {
+      console.error("[select-page] token verify failed:", verr.response?.data || verr.message);
+      return res.status(403).json({ error: "Page token баталгаажсангүй" });
+    }
+
     const prisma = getPrisma();
     await prisma.organization.update({
       where: { id: req.org.orgId },
       data: {
         fbPageId: pageId,
-        fbPageToken: pageToken,
+        fbPageToken: encrypt(pageToken), // C2: at-rest шифрлэлт (ENCRYPTION_KEY-гүй бол NO-OP)
         ...(instagramId && { instagramAccountId: instagramId }),
       },
     });
@@ -247,7 +288,7 @@ router.post("/conversations/:psid/reply", async (req, res) => {
     const org = await prisma.organization.findUnique({ where: { id: req.org.orgId } });
     if (!org?.fbPageToken) return res.status(400).json({ error: "Facebook холбогдоогүй байна" });
 
-    await sendText(req.params.psid, text, org.fbPageToken);
+    await sendText(req.params.psid, text, decrypt(org.fbPageToken));
 
     const chat = await prisma.turuuChat.findFirst({ where: { psid: req.params.psid, orgId: req.org.orgId } });
     const messages = Array.isArray(chat?.messages) ? [...chat.messages] : [];
@@ -1474,7 +1515,7 @@ router.post("/orders/:id/confirm-payment", async (req, res) => {
     if (order.psid) {
       try {
         const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { fbPageToken: true } });
-        const token = org?.fbPageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+        const token = decrypt(org?.fbPageToken) || process.env.FB_PAGE_ACCESS_TOKEN;
         if (token) {
           const orderCode = order.id.slice(-6).toUpperCase();
           await sendText(order.psid, `✅ Таны төлбөр баталгаажлаа! Захиалга #${orderCode} батлагдлаа. Удахгүй хүргэлт хийгдэнэ 🙏`, token).catch(() => {});
@@ -1595,19 +1636,22 @@ router.post("/billing/pay/check", async (req, res) => {
     const prisma = getPrisma();
     const org = await prisma.organization.findUnique({
       where: { id: req.org.orgId },
-      select: { subInvoiceId: true, subQpayStatus: true },
+      select: { id: true, subInvoiceId: true, subQpayStatus: true, subscriptionEndsAt: true },
     });
+    // webhook аль хэдийн боловсруулсан (subInvoiceId-г null болгож, PAID болгосон) бол
+    // амжилттай гэж шууд буцаана — "Invoice байхгүй" гэж буруу алдаа гаргахгүй.
+    if (org.subQpayStatus === "PAID") return res.json({ paid: true, alreadyPaid: true });
     if (!org.subInvoiceId) return res.status(400).json({ error: "Invoice байхгүй" });
 
     const subQpay = require("../services/subscription-qpay.service");
     const result = await subQpay.checkPayment(org.subInvoiceId);
-    const paid = result.invoice_status === "PAID";
+    const paid = result.invoice_status === "PAID" || (result.count != null && result.count > 0) || result.payment_status === "PAID";
 
-    if (paid && org.subQpayStatus !== "PAID") {
-      await prisma.organization.update({
-        where: { id: req.org.orgId },
-        data: { subQpayStatus: "PAID" },
-      });
+    if (paid) {
+      // webhook-тэй ИЖИЛ shared helper-ээр эрхийг 30 хоног сунгана.
+      // (өмнө энд зөвхөн subQpayStatus="PAID" тавьдаг байсан тул эрх сунгагдахгүй,
+      //  улмаар дараагийн webhook count=0 болж сунгалт үүрд алдагддаг байсан.)
+      await applySubscriptionPayment(prisma, org);
     }
 
     res.json({ paid, result });
@@ -1920,7 +1964,7 @@ router.put("/profile/telegram", async (req, res) => {
     const prisma = getPrisma();
     await prisma.organization.update({
       where: { id: req.org.orgId },
-      data: { telegramBotToken: telegramBotToken || null, telegramChatId: telegramChatId || null },
+      data: { telegramBotToken: telegramBotToken ? encrypt(telegramBotToken) : null, telegramChatId: telegramChatId ? encrypt(telegramChatId) : null },
     });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
@@ -2460,7 +2504,7 @@ router.post("/orders/:id/check-payment", async (req, res) => {
       if (order.psid) {
         try {
           const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { fbPageToken: true } });
-          const token = org?.fbPageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+          const token = decrypt(org?.fbPageToken) || process.env.FB_PAGE_ACCESS_TOKEN;
           if (token) {
             const orderCode = order.id.slice(-6).toUpperCase();
             await sendText(order.psid, `✅ Таны төлбөр амжилттай хийгдлээ! Захиалга #${orderCode} батлагдлаа 🙏`, token).catch(() => {});

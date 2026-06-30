@@ -5,7 +5,7 @@
 // Бүх биелүүлэгч идемпотент тул polling/webhook-той зөрчилгүй.
 const qpay = require("./qpay.service");
 const subQpay = require("./subscription-qpay.service");
-const { markStoreOrderPaid, applyWalletTopup } = require("./payment.service");
+const { markStoreOrderPaid, applyWalletTopup, applySubscriptionPayment } = require("./payment.service");
 const { fulfillDomainOrder } = require("./domain.service");
 const vdomains = require("./vercelDomains.service");
 const vercel = require("./vercel.service");
@@ -60,6 +60,22 @@ async function runReconciliation(prisma) {
     });
     fixed += r.reduce((s, x) => s + (x === 1 ? 1 : 0), 0);
   } catch (e) { console.error("[reconcile:domain]", e.message); }
+
+  // 4) Subscription (platform QPay) — polling/webhook хоёулаа алдвал барих нөөц давхарга.
+  //    (өмнө subscription-г reconcile огт шалгадаггүй байсан тул polling-ийн алдаатай
+  //     хослоход төлсөн ч сунгагдаагүй эрх гацдаг байсан.)
+  try {
+    const orgs = await prisma.organization.findMany({
+      where: { subQpayStatus: "PENDING", subInvoiceId: { not: null } },
+      select: { id: true, subInvoiceId: true, subscriptionEndsAt: true },
+      take: 200,
+    });
+    const r = await mapLimit(orgs, RECONCILE_CONCURRENCY, async (org) => {
+      try { return isPaid(await subQpay.checkPayment(org.subInvoiceId)) && (await applySubscriptionPayment(prisma, org)).applied ? 1 : 0; }
+      catch (e) { console.error(`[reconcile:sub] ${org.id}`, e.message); captureException(e, { orgId: org.id, ctx: "reconcile-sub" }); return 0; }
+    });
+    fixed += r.reduce((s, x) => s + (x === 1 ? 1 : 0), 0);
+  } catch (e) { console.error("[reconcile:sub]", e.message); }
 
   if (fixed) console.log(`[reconcile] ${fixed} pending payment(s) reconciled`);
   return fixed;

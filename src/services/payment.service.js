@@ -42,4 +42,28 @@ async function applyWalletTopup(prisma, tx) {
   return true;
 }
 
-module.exports = { markStoreOrderPaid, applyWalletTopup };
+// Subscription төлбөрийг ИДЕМПОТЕНТоор хэрэгжүүлж эрхийг 30 хоног сунгана.
+// webhook callback болон polling-check (/billing/pay/check) ХОЁУЛАА энэ функцийг
+// дуудна — ингэснээр логик хоёр тийш салахгүй (өмнө polling нь зөвхөн subQpayStatus-г
+// PAID болгоод subscriptionEndsAt-г сунгахгүй, subInvoiceId-г null болгохгүй байсан тул
+// polling webhook-оос түрүүлбэл эрх сунгагдахгүй гацаж, дараагийн webhook count=0 болж
+// сунгалт үүрд алдагддаг байсан).
+// org-д { id, subInvoiceId, subscriptionEndsAt } байх ёстой.
+async function applySubscriptionPayment(prisma, org) {
+  if (!org?.id || !org.subInvoiceId) return { applied: false, subscriptionEndsAt: null };
+  const now = new Date();
+  const base = org.subscriptionEndsAt && new Date(org.subscriptionEndsAt) > now
+    ? new Date(org.subscriptionEndsAt)
+    : now;
+  const subscriptionEndsAt = new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+  // Зөвхөн ЭНЭ invoice-ийг боловсруулсан ганц хүсэлт count=1 авна.
+  // subInvoiceId=null болгосноор зэрэг ирсэн webhook+polling давхар 30 хоног нэмэхээс сэргийлнэ.
+  const r = await prisma.organization.updateMany({
+    where: { id: org.id, subInvoiceId: org.subInvoiceId, subQpayStatus: { not: "PAID" } },
+    data: { subQpayStatus: "PAID", subscriptionEndsAt, status: "active", subInvoiceId: null },
+  });
+  return { applied: r.count === 1, subscriptionEndsAt };
+}
+
+module.exports = { markStoreOrderPaid, applyWalletTopup, applySubscriptionPayment };
