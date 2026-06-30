@@ -1,62 +1,112 @@
-# Mongolagent — Ажлын дүрэм
+# Mongolagent — Ажлын дүрэм (Trunk-based)
 
 ## Энэ файлын тухай
-Энэ бол 2 developer хамтран ажиллах Mongolagent төслийн дүрэм. **Уншиж дуусаад ажил эхэл** — дундаас орж ажиллахгүй.
+2 хөгжүүлэгч **зэрэг ажиллахад ажил алдагдахгүй, логик алдаа production-д орохгүй, код эвдрэхгүй** байх дүрэм. Ажил эхлэхийн өмнө уншина.
 
-## Төслийн бүтэц
-Mongolagent нь 4 тусдаа repo-оос бүрдэнэ:
-- `mongolagent-app` — Mobile / React Native app
-- `mongolagent-web` — Вэбсайт (landing page)
-- `mongolagent-backend` — API сервер
-- `mongolagent-admin` — Admin dashboard
+---
 
-## Хэн юу хийх вэ
-Ажил эхлэхдээ нөгөө developer-тэйгээ **яг аль feature-г хэн хийх талаар тохирсоны дараа** branch үүсгэж эхэл. Нэгэн зэрэг нэг файлд хүрэхгүй байхыг хичээ.
+## 1. Гол зарчим: `master` = ЦОРЫН ГАНЦ их бие (trunk)
 
-
-
-## Branch Strategy
+- `master` бол production (амьд сайт). **Үргэлж ажилладаг, ногоон байх ёстой.**
+- ❌ `master` руу **ШУУД push ХИЙХГҮЙ.**
+- ❌ Хэзээ ч **`git push --force` master руу хийхгүй** (нөгөө хүний ажлыг устгана).
+- ✅ Бүх өөрчлөлт богино настай `feature/*` branch дээр хийгдэж, **PR-ээр** дамжина.
+- ⚠️ `develop` branch-ийг **ХЭРЭГЛЭХГҮЙ** (хуучирч/эвдэрсэн — архивлагдсан). Хэрэв байгаа бол battle биш.
 
 ```
-master   ← Production (живой сайт) — шууд push ХОРИОТОЙ
-develop  ← Хоёр developer-н нийлүүлэх газар
-feature/ ← Тус тусын ажлын branch
+        feature/таны-ажил ──┐  PR + review + CI ногоон
+                            ▼
+master (trunk) ━━━━━━━━━━━━━●━━━━━━━━━━▶  production
 ```
 
-## Өдөр тутмын flow
+---
 
-### Шинэ ажил эхлэхэд
+## 2. Шинэ ажил эхлэх (ЗААВАЛ ийм дараалал)
+
 ```bash
-git checkout develop
-git pull origin develop          # Сүүлийн кодыг татах
+git checkout master
+git pull origin master            # ХАМГИЙН СҮҮЛИЙН кодоос эхэл (заавал!)
 git checkout -b feature/ажлын-нэр
 ```
 
-### Ажил дууссан
+> **Хэн юу хийхээ урьдчилж тохир.** Нэг feature-ийг 2 хүн зэрэг хийвэл хувилбар зөрж, нэгийнх нь ажил дарагдана. Нэг хүн = нэг feature.
+
+---
+
+## 3. Ажиллаж байх үед (divergence-аас сэргийлэх)
+
+Өдөрт ≥1 удаа master-ийн сүүлийн өөрчлөлтийг branch руугаа татаж ав:
+
 ```bash
-git add .
-git commit -m "feat: тайлбар"
+git checkout master && git pull origin master
+git checkout feature/ажлын-нэр
+git merge master              # эсвэл: git rebase master
+```
+
+Ингэснээр PR-ийн үед том conflict гарахгүй, нөгөө хүний өөрчлөлттэй эрт мөргөлдөж шийднэ.
+
+---
+
+## 4. Push хийхээс ӨМНӨ (локал шалгалт)
+
+```bash
+node --test                   # бүх тест ногоон эсэх
+```
+
+Тест унавал push хийхгүй — эхлээд зас.
+
+---
+
+## 5. Ажил дуусахад → PR
+
+```bash
+git add -A
+git commit -m "feat: тайлбар"   # commit дүрэм доор
 git push origin feature/ажлын-нэр
-# GitHub дээр Pull Request үүсгэ → develop branch-д merge хий
+gh pr create --base master --fill   # эсвэл GitHub дээр PR үүсгэ
 ```
 
-### Release хийхэд
-```bash
-# develop → master PR үүсгэж merge хийнэ
+Дараа нь:
+1. **CI ногоон болохыг хүлээ** (автомат тест өнгөрнө) — энэ нь ЗААВАЛ.
+2. *(Сонголтоор)* Эрсдэлтэй өөрчлөлт (төлбөр/auth/мөнгө) бол нөгөө хөгжүүлэгчээр харуул. Энгийн өөрчлөлтөд заавал биш.
+3. **"Squash and merge"** дарж master руу нэгтгэнэ.
+4. Branch автоматаар устна (эсвэл `git push origin --delete feature/...`).
+
+> Branch protection идэвхтэй: ногоон CI-гүйгээр merge хийх боломжгүй, master руу шууд/force push хийх боломжгүй. **Хүний review шаардахгүй** — нэг хүн PR-ээ өөрөө merge хийж болно (CI ногоон бол).
+
+---
+
+## 6. Commit message дүрэм
+
+```
+feat:     шинэ feature
+fix:      bug засвар
+refactor: код цэвэрлэгээ (зан өөрчлөгдөхгүй)
+style:    UI/формат
+chore:    тохиргоо/CI/build
+docs:     баримт бичиг
+test:     тест нэмэх/засах
 ```
 
-## Commit message дүрэм
+---
 
-```
-feat: шинэ feature нэмсэн
-fix: bug зассан
-refactor: код цэвэрлэсэн
-style: UI өөрчилсөн
-docs: баримт бичиг
-```
+## 7. Алтан дүрмүүд (хураангуй)
 
-## Чухал анхааруулга
+| Хийх ✅ | Хийхгүй ❌ |
+|---------|-----------|
+| `feature/*` branch дээр ажиллах | `master` руу шууд commit/push |
+| PR-ээр дамжих (CI ногоон болгох) | улаан CI дээр merge |
+| Push-ийн өмнө `node --test` | улаан тесттэй push |
+| Эрсдэлтэй (төлбөр/auth) PR-ийг харуулах *(сонголтоор)* | — |
+| Өдөр бүр master-аас татах | branch-аа 1 долоо хоног тусгаарлах |
+| Жижиг, богино настай PR | 50 файлын аварга PR |
+| Нэг хүн = нэг feature | 2 хүн нэг feature давхар |
+| `git push --force-with-lease` (зайлшгүй бол өөрийн branch дээр) | `git push --force` master руу |
 
-- `master` branch-д шууд push хийхгүй — заавал PR-ээр дамжуулна
-- Ажил эхлэхийн өмнө `git pull origin develop` хийж сүүлийн кодыг татна
-- Нэг feature = нэг branch = нэг PR
+---
+
+## 8. Гажуудал гарвал
+
+- **PR-д conflict гарвал:** `git merge master` хийгээд гараар шийдэж дахин push.
+- **Буруу зүйл master-д оров:** тэр PR-ийг GitHub дээр **Revert** дар (force-push биш).
+- **"Ажил алга болсон" санагдвал:** `git reflog` — локал commit бараг хэзээ ч үнэхээр алга болдоггүй.
