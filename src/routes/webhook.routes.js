@@ -7,6 +7,8 @@ const { getPrisma } = require("../lib/db");
 const { checkPayment } = require("../services/qpay.service");
 const { rateLimit } = require("../middleware/rateLimit");
 const telegram = require("../services/telegram.service");
+const { applySubscriptionPayment } = require("../services/payment.service");
+const { decrypt } = require("../lib/secretCrypto");
 
 const router = express.Router();
 
@@ -81,7 +83,7 @@ router.post("/", (req, res) => {
         const org = await prisma.organization.findUnique({ where: { fbPageId: pageId } });
         if (org) {
           orgId = org.id;
-          pageToken = org.fbPageToken;
+          pageToken = decrypt(org.fbPageToken);
         }
       } catch (err) {
         console.error("[webhook] org lookup error:", err.message);
@@ -210,7 +212,7 @@ router.post("/qpay/:orderId", whLimit, async (req, res) => {
             where: { id: order.orgId },
             select: { fbPageToken: true },
           });
-          const token = org?.fbPageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+          const token = decrypt(org?.fbPageToken) || process.env.FB_PAGE_ACCESS_TOKEN;
           if (token) {
             await sendText(
               order.psid,
@@ -306,7 +308,7 @@ router.post("/qpay-appointment/:appointmentId", whLimit, async (req, res) => {
             where: { id: appt.orgId },
             select: { fbPageToken: true },
           });
-          const token = org?.fbPageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+          const token = decrypt(org?.fbPageToken) || process.env.FB_PAGE_ACCESS_TOKEN;
           if (token) {
             await sendText(
               appt.psid,
@@ -342,19 +344,11 @@ router.post("/sub-qpay/:orgId", whLimit, async (req, res) => {
       const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
       if (!paid) return;
 
-      // Subscription 30 хоногоор сунгана — ҮЛДСЭН хугацаан дээр нэмж стэклэнэ (эрт төлвөл хохирохгүй),
-      // сарын төгсгөлийн (1-р сарын 31 → 3-р сар) үсрэлтийн алдааг 30-хоногийн нэмэлтээр арилгана.
-      const now = new Date();
-      const base = org.subscriptionEndsAt && new Date(org.subscriptionEndsAt) > now ? new Date(org.subscriptionEndsAt) : now;
-      const subscriptionEndsAt = new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000);
-
-      // Идемпотент — зөвхөн ЭНЭ invoice-ийг боловсруулсан ганц хүсэлт амжилттай болно.
-      // subInvoiceId=null болгосноор зэрэг ирсэн 2 webhook давхар 30 хоног нэмэхээс сэргийлнэ.
-      const updOrg = await prisma.organization.updateMany({
-        where: { id: org.id, subInvoiceId: org.subInvoiceId, subQpayStatus: { not: "PAID" } },
-        data: { subQpayStatus: "PAID", subscriptionEndsAt, status: "active", subInvoiceId: null },
-      });
-      if (updOrg.count !== 1) return;
+      // Subscription 30 хоногоор сунгана — webhook болон polling-check нэг л shared helper
+      // ашиглана (логик хоёр тийш салахаас сэргийлнэ). Идемпотент: зөвхөн ЭНЭ invoice-ийг
+      // боловсруулсан ганц хүсэлт count=1 авна.
+      const { applied, subscriptionEndsAt } = await applySubscriptionPayment(prisma, org);
+      if (!applied) return;
 
       // Telegram мэдэгдэл — платформ admin-д (env бот). notifyText(null) → платформын env ашиглана.
       try {

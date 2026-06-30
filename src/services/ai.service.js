@@ -2,6 +2,7 @@
 const OpenAI = require("openai");
 const { buildSystemPrompt } = require("../lib/prompt");
 const cache = require("../lib/cache");
+const { decrypt } = require("../lib/secretCrypto");
 
 // System prompt-ийг 60с кэшилнэ — мессеж бүрт turuuSettings-ийг DB-ээс уншихаас сэргийлнэ
 // (өндөр ачаалалд DB query огцом буурна). Тохиргоо засагдвал invalidatePrompt-оор цэвэрлэнэ.
@@ -869,8 +870,8 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
                   where: { id: orgId },
                   select: { telegramBotToken: true, telegramChatId: true },
                 });
-                const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
-                const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+                const botToken = decrypt(org?.telegramBotToken) || process.env.TELEGRAM_BOT_TOKEN;
+                const chatId = decrypt(org?.telegramChatId) || process.env.TELEGRAM_CHAT_ID;
                 if (botToken && chatId) {
                   const axios = require("axios");
                   const text = `💳 Хэрэглэгч төлбөр шилжүүлснээ мэдэгдлээ!\nЗахиалга #${orderCode}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}\n${args.notes ? `Тайлбар: ${args.notes}` : ""}\nDashboard-аас шалгаж баталгаажуулна уу!`;
@@ -1047,8 +1048,8 @@ async function processReceiptImage(psid, imageUrl, orgId = null) {
         where: { id: orgId },
         select: { telegramBotToken: true, telegramChatId: true },
       });
-      const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
-      const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+      const botToken = decrypt(org?.telegramBotToken) || process.env.TELEGRAM_BOT_TOKEN;
+      const chatId = decrypt(org?.telegramChatId) || process.env.TELEGRAM_CHAT_ID;
       if (botToken && chatId) {
         const axios = require("axios");
         const statusLine = amountMatches
