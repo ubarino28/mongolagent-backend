@@ -9,6 +9,10 @@ const { markStoreOrderPaid, applyWalletTopup } = require("./payment.service");
 const { fulfillDomainOrder } = require("./domain.service");
 const vdomains = require("./vercelDomains.service");
 const vercel = require("./vercel.service");
+const { captureException } = require("../lib/sentry");
+const { mapLimit } = require("../lib/concurrency");
+
+const RECONCILE_CONCURRENCY = 5; // QPay-г хэт ачаалахгүйгээр зэрэгцээ шалгана
 
 function isPaid(r) {
   return !!(r && (r.invoice_status === "PAID" || (r.count != null && r.count > 0) || r.payment_status === "PAID"));
@@ -24,10 +28,11 @@ async function runReconciliation(prisma) {
       where: { qpayStatus: "PENDING", qpayInvoiceId: { not: null }, createdAt: { gte: cutoff } },
       take: 200,
     });
-    for (const o of orders) {
-      try { if (isPaid(await qpay.checkPayment(o.qpayInvoiceId)) && await markStoreOrderPaid(prisma, o)) fixed++; }
-      catch { /* ганц алдаа бусдыг зогсоохгүй */ }
-    }
+    const r = await mapLimit(orders, RECONCILE_CONCURRENCY, async (o) => {
+      try { return isPaid(await qpay.checkPayment(o.qpayInvoiceId)) && await markStoreOrderPaid(prisma, o) ? 1 : 0; }
+      catch (e) { console.error(`[reconcile:orders] ${o.id}`, e.message); captureException(e, { orderId: o.id, ctx: "reconcile-order" }); return 0; }
+    });
+    fixed += r.reduce((s, x) => s + (x === 1 ? 1 : 0), 0);
   } catch (e) { console.error("[reconcile:orders]", e.message); }
 
   // 2) Хэтэвчийн цэнэглэлт (platform QPay)
@@ -36,10 +41,11 @@ async function runReconciliation(prisma) {
       where: { qpayStatus: "PENDING", type: "topup", qpayInvoiceId: { not: null }, createdAt: { gte: cutoff } },
       take: 200,
     });
-    for (const tx of txs) {
-      try { if (isPaid(await subQpay.checkPayment(tx.qpayInvoiceId)) && await applyWalletTopup(prisma, tx)) fixed++; }
-      catch { /* skip */ }
-    }
+    const r = await mapLimit(txs, RECONCILE_CONCURRENCY, async (tx) => {
+      try { return isPaid(await subQpay.checkPayment(tx.qpayInvoiceId)) && await applyWalletTopup(prisma, tx) ? 1 : 0; }
+      catch (e) { console.error(`[reconcile:wallet] ${tx.id}`, e.message); captureException(e, { txId: tx.id, ctx: "reconcile-wallet" }); return 0; }
+    });
+    fixed += r.reduce((s, x) => s + (x === 1 ? 1 : 0), 0);
   } catch (e) { console.error("[reconcile:wallet]", e.message); }
 
   // 3) Домэйн захиалга (platform QPay)
@@ -48,10 +54,11 @@ async function runReconciliation(prisma) {
       where: { status: "pending", qpayInvoiceId: { not: null }, createdAt: { gte: cutoff } },
       take: 100,
     });
-    for (const order of domains) {
-      try { if (isPaid(await subQpay.checkPayment(order.qpayInvoiceId))) { await fulfillDomainOrder(prisma, { vdomains, vercel }, order); fixed++; } }
-      catch { /* skip */ }
-    }
+    const r = await mapLimit(domains, RECONCILE_CONCURRENCY, async (order) => {
+      try { if (isPaid(await subQpay.checkPayment(order.qpayInvoiceId))) { await fulfillDomainOrder(prisma, { vdomains, vercel }, order); return 1; } return 0; }
+      catch (e) { console.error(`[reconcile:domain] ${order.id}`, e.message); captureException(e, { orderId: order.id, ctx: "reconcile-domain" }); return 0; }
+    });
+    fixed += r.reduce((s, x) => s + (x === 1 ? 1 : 0), 0);
   } catch (e) { console.error("[reconcile:domain]", e.message); }
 
   if (fixed) console.log(`[reconcile] ${fixed} pending payment(s) reconciled`);

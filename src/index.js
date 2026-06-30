@@ -6,9 +6,19 @@ const { startReconciliation } = require("./services/reconcile.service");
 const { captureException } = require("./lib/sentry");
 const { getPrisma } = require("./lib/db");
 
-// Баригдаагүй алдаануудыг Sentry-д бүртгэнэ (процессыг унагаахгүй)
+if (!process.env.SENTRY_DSN) {
+  console.warn("[WARN] SENTRY_DSN тохируулаагүй — алдааны мониторинг идэвхгүй (production-д тохируулахыг зөвлөнө).");
+}
+
+// unhandledRejection — бүртгэнэ, процессыг унагаахгүй (зарим сангийн benign rejection байдаг)
 process.on("unhandledRejection", (reason) => { console.error("[unhandledRejection]", reason); captureException(reason instanceof Error ? reason : new Error(String(reason))); });
-process.on("uncaughtException", (err) => { console.error("[uncaughtException]", err); captureException(err); });
+// uncaughtException — төлөв эвдэрсэн гэж үзэж, бүртгээд RESTART хийнэ (zombie process-оос сэргийлнэ).
+// Render автоматаар дахин асаана. Sentry flush хийх багахан зай өгнө.
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err);
+  captureException(err);
+  setTimeout(() => process.exit(1), 1000).unref?.();
+});
 
 const PORT = process.env.PORT || 3001;
 
@@ -58,7 +68,7 @@ async function autoCompleteReservations() {
   }
 }
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`[mongolagent] server running on port ${PORT}`);
   startDomainHealthLoop();
   // 30 минут тутамд auto-complete шалгана
@@ -67,3 +77,13 @@ app.listen(PORT, () => {
   // 5 минут тутамд төлбөрийн reconciliation (webhook алдвал барьж авах нөөц)
   startReconciliation(getPrisma());
 });
+
+// Graceful shutdown — Render deploy/restart үед холболтуудыг цэвэрхэн хаана (DB connection алдагдахаас сэргийлнэ)
+async function shutdown(signal) {
+  console.log(`[shutdown] ${signal} — серверийг цэвэрхэн хааж байна...`);
+  server.close(() => console.log("[shutdown] HTTP сервер хаагдлаа"));
+  try { await getPrisma().$disconnect(); } catch { /* no-op */ }
+  setTimeout(() => process.exit(0), 2000).unref?.();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

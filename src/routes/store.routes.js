@@ -91,7 +91,7 @@ router.get("/templates", async (req, res) => {
       return { ...t, owned: isOwned, locked: !isOwned };
     });
     res.json({ templates });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // Загварыг хэрэглэхийг зөвшөөрөх эсэх (үнэгүй эсвэл эзэмшсэн байх ёстой)
@@ -142,7 +142,7 @@ router.post("/templates/:id/purchase", async (req, res) => {
     });
 
     res.json({ ok: true, invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/templates/:id/purchase/check — загварын төлбөр шалгах
@@ -166,7 +166,7 @@ router.post("/templates/:id/purchase/check", async (req, res) => {
       });
     }
     res.json({ paid });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Store ──────────────────────────────────────────────────────────────────
@@ -180,7 +180,7 @@ router.get("/", async (req, res) => {
       include: { _count: { select: { products: true, pages: true, orders: true } } },
     });
     res.json({ store: store || null });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store — дэлгүүр үүсгэх (template-ээс seed хийнэ). Аль хэдийн байвал буцаана.
@@ -254,7 +254,7 @@ router.post("/", async (req, res) => {
     const domain = await vercel.ensureStoreDomain(store.slug);
 
     res.json({ store, domain });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // PUT /store — дэлгүүрийн тохиргоо шинэчлэх (нэр, theme, slug, домэйн)
@@ -290,6 +290,15 @@ router.put("/", async (req, res) => {
     if (customDomain !== undefined) {
       const dom = customDomain ? String(customDomain).toLowerCase().trim() : null;
       if (dom) {
+        // Домэйн форматыг шалгана — localhost/IP/дотоод/платформын subdomain зэрэг буруу нэр оруулж
+        // routing эвдэх, SSRF үүсгэхээс сэргийлнэ.
+        const DOMAIN_RE = /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/;
+        const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(dom);
+        const blocked = dom === "localhost" || dom.endsWith(".local") || dom.endsWith(".internal")
+          || dom === "mongolagent.mn" || dom.endsWith(".mongolagent.mn");
+        if (!DOMAIN_RE.test(dom) || dom.length > 253 || isIp || blocked) {
+          return res.status(400).json({ error: "Домэйн нэр буруу эсвэл хориотой байна" });
+        }
         const taken = await prisma.store.findFirst({ where: { customDomain: dom, NOT: { id: store.id } } });
         if (taken) return res.status(409).json({ error: "Энэ домэйн өөр дэлгүүрт холбогдсон байна" });
       }
@@ -305,7 +314,7 @@ router.put("/", async (req, res) => {
     }
 
     res.json({ store: updated });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/recheck-domain — домэйн/SSL ажиллахгүй байвал дахин шалгаж засах
@@ -317,7 +326,7 @@ router.post("/recheck-domain", async (req, res) => {
     // Хэрэглэгч дарж байгаа учир шууд дахин trigger хийгээд хүлээнэ
     const r = await vercel.ensureStoreDomain(store.slug, { maxWaitMs: 25000, nudgeAfterMs: 0 });
     res.json(r);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // DELETE /store — дэлгүүрийг бүхэлд нь устгах (хуудас, бараа, захиалга, купон cascade)
@@ -334,7 +343,7 @@ router.delete("/", async (req, res) => {
     await prisma.store.delete({ where: { id: store.id } });
 
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/apply-template — сонгосон загварыг одоо байгаа дэлгүүрт хэрэглэх
@@ -380,7 +389,7 @@ router.post("/apply-template", async (req, res) => {
       include: { _count: { select: { products: true, pages: true, orders: true } } },
     });
     res.json({ store: updated, seededProducts: seeded });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/publish — нийтлэх / нуух
@@ -401,7 +410,7 @@ router.post("/publish", async (req, res) => {
     if (publish) domain = await vercel.addStoreDomain(updated.slug);
 
     res.json({ store: updated, domain });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Pages ────────────────────────────────────────────────────────────────────
@@ -414,7 +423,7 @@ router.get("/pages", async (req, res) => {
     if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
     const pages = await prisma.storePage.findMany({ where: { storeId: store.id }, orderBy: { sortOrder: "asc" } });
     res.json({ pages });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/pages — шинэ хуудас
@@ -441,7 +450,7 @@ router.post("/pages", async (req, res) => {
       data: { storeId: store.id, title, path: normPath, type: type || "custom", content: pageContent, published: true, sortOrder: count },
     });
     res.json({ page });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // PUT /store/pages/:id — хуудас шинэчлэх (Puck content хадгалах)
@@ -463,7 +472,7 @@ router.put("/pages/:id", async (req, res) => {
 
     const updated = await prisma.storePage.update({ where: { id: page.id }, data });
     res.json({ page: updated });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // DELETE /store/pages/:id
@@ -477,7 +486,7 @@ router.delete("/pages/:id", async (req, res) => {
     if (page.path === "/") return res.status(400).json({ error: "Нүүр хуудсыг устгах боломжгүй" });
     await prisma.storePage.delete({ where: { id: page.id } });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Products ─────────────────────────────────────────────────────────────────
@@ -490,7 +499,7 @@ router.get("/products", async (req, res) => {
     if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
     const products = await prisma.product.findMany({ where: { storeId: store.id }, orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }] });
     res.json({ products });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/products
@@ -519,7 +528,7 @@ router.post("/products", async (req, res) => {
       },
     });
     res.json({ product });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/products/bulk — олон бараа нэг дор оруулах (CSV/Excel import)
@@ -552,7 +561,7 @@ router.post("/products/bulk", async (req, res) => {
 
     const result = await prisma.product.createMany({ data });
     res.json({ created: result.count });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // PUT /store/products/:id
@@ -580,7 +589,7 @@ router.put("/products/:id", async (req, res) => {
 
     const updated = await prisma.product.update({ where: { id: product.id }, data });
     res.json({ product: updated });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // DELETE /store/products/:id
@@ -593,7 +602,7 @@ router.delete("/products/:id", async (req, res) => {
     if (!product) return res.status(404).json({ error: "Бараа олдсонгүй" });
     await prisma.product.delete({ where: { id: product.id } });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Orders (эзэн харах) ────────────────────────────────────────────────────────
@@ -606,7 +615,7 @@ router.get("/orders", async (req, res) => {
     if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
     const orders = await prisma.storeOrder.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "desc" } });
     res.json({ orders });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // PATCH /store/orders/:id — захиалгын статус шинэчлэх
@@ -631,7 +640,7 @@ router.patch("/orders/:id", async (req, res) => {
     const updated = await prisma.storeOrder.update({ where: { id: order.id }, data });
     await logAudit(prisma, req, "order.update", order.id, data);
     res.json({ order: updated });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/orders/:id/refund — буцаалт бүртгэх (дүн + шалтгаан). Бүтэн бол status=REFUNDED
@@ -659,7 +668,7 @@ router.post("/orders/:id/refund", async (req, res) => {
     });
     await logAudit(prisma, req, "order.refund", order.id, { amount: amt, full });
     res.json({ order: updated });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── AI section generator ────────────────────────────────────────────────────
@@ -670,7 +679,7 @@ router.post("/ai/section", async (req, res) => {
     if (!prompt || String(prompt).trim().length < 4) return res.status(400).json({ error: "Бизнесээ товч тайлбарлана уу" });
     const blocks = await generateSections(prompt);
     res.json({ blocks });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Reviews (барааны сэтгэгдэл — модераци) ──────────────────────────────────
@@ -686,7 +695,7 @@ router.get("/reviews", async (req, res) => {
     const products = await prisma.product.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } });
     const nameById = new Map(products.map((p) => [p.id, p.name]));
     res.json({ reviews: reviews.map((r) => ({ ...r, productName: nameById.get(r.productId) || "—" })) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // PATCH /store/reviews/:id — нуух/харуулах (approved)
@@ -699,7 +708,7 @@ router.patch("/reviews/:id", async (req, res) => {
     if (!review) return res.status(404).json({ error: "Сэтгэгдэл олдсонгүй" });
     const updated = await prisma.review.update({ where: { id: review.id }, data: { approved: !!req.body.approved } });
     res.json({ review: updated });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // DELETE /store/reviews/:id
@@ -712,7 +721,7 @@ router.delete("/reviews/:id", async (req, res) => {
     if (!review) return res.status(404).json({ error: "Сэтгэгдэл олдсонгүй" });
     await prisma.review.delete({ where: { id: review.id } });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Staff (ажилтны эрх) — зөвхөн owner ──────────────────────────────────────
@@ -726,7 +735,7 @@ router.get("/staff", requireOwner, async (req, res) => {
       select: { id: true, name: true, email: true, role: true, status: true, createdAt: true },
     });
     res.json({ staff });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 router.post("/staff", requireOwner, async (req, res) => {
@@ -748,7 +757,7 @@ router.post("/staff", requireOwner, async (req, res) => {
     });
     await logAudit(prisma, req, "staff.create", created.email, { role: r });
     res.json({ staff: created });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 router.patch("/staff/:id", requireOwner, async (req, res) => {
@@ -764,7 +773,7 @@ router.patch("/staff/:id", requireOwner, async (req, res) => {
     const updated = await prisma.staffMember.update({ where: { id: member.id }, data, select: { id: true, name: true, email: true, role: true, status: true, createdAt: true } });
     await logAudit(prisma, req, "staff.update", member.email, data.passwordHash ? { reset: true } : { role: data.role, status: data.status });
     res.json({ staff: updated });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 router.delete("/staff/:id", requireOwner, async (req, res) => {
@@ -775,7 +784,7 @@ router.delete("/staff/:id", requireOwner, async (req, res) => {
     await prisma.staffMember.delete({ where: { id: member.id } });
     await logAudit(prisma, req, "staff.delete", member.email);
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Audit log — зөвхөн owner ────────────────────────────────────────────────
@@ -788,7 +797,7 @@ router.get("/audit", requireOwner, async (req, res) => {
       take: 300,
     });
     res.json({ logs });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Customers (захиалгаас цуглуулсан худалдан авагчид) ──────────────────────
@@ -820,7 +829,7 @@ router.get("/customers", async (req, res) => {
     }
     const customers = [...map.values()].sort((a, b) => new Date(b.lastOrderAt) - new Date(a.lastOrderAt));
     res.json({ customers });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Discounts (купон / хямдрал) ─────────────────────────────────────────────
@@ -837,7 +846,7 @@ router.get("/discounts", async (req, res) => {
     if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
     const discounts = await prisma.discount.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "desc" } });
     res.json({ discounts });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/discounts
@@ -864,7 +873,7 @@ router.post("/discounts", async (req, res) => {
       },
     });
     res.json({ discount });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // PUT /store/discounts/:id
@@ -893,7 +902,7 @@ router.put("/discounts/:id", async (req, res) => {
     if (endsAt !== undefined) data.endsAt = endsAt ? new Date(endsAt) : null;
     const discount = await prisma.discount.update({ where: { id: existing.id }, data });
     res.json({ discount });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // DELETE /store/discounts/:id
@@ -906,7 +915,7 @@ router.delete("/discounts/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Купон олдсонгүй" });
     await prisma.discount.delete({ where: { id: existing.id } });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Домэйн зарах (Vercel registrar дээр) ────────────────────────────────────
@@ -917,7 +926,7 @@ router.get("/domain/search", async (req, res) => {
     if (!vdomains.enabled()) return res.status(503).json({ error: "Домэйн үйлчилгээ идэвхгүй байна" });
     const results = await vdomains.search(req.query.q || "");
     res.json({ results });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // GET /store/domain/tlds — TLD бүрийн суурь үнэ (жагсаалтад)
@@ -925,7 +934,7 @@ router.get("/domain/tlds", async (req, res) => {
   try {
     if (!vdomains.enabled()) return res.status(503).json({ error: "Домэйн үйлчилгээ идэвхгүй байна" });
     res.json({ tlds: await vdomains.tldPrices() });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/domain/purchase { domain } — QPay invoice үүсгэнэ
@@ -949,7 +958,7 @@ router.post("/domain/purchase", async (req, res) => {
     await prisma.domainOrder.update({ where: { id: order.id }, data: { qpayInvoiceId: inv.invoice_id, qpayQrText: inv.qr_text, qpayUrls: inv.urls || [] } });
 
     res.json({ orderId: order.id, domain, priceMnt, payment: { qrText: inv.qr_text, qrImage: inv.qr_image, urls: inv.urls || [] } });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // GET /store/domain/purchase/:id/status — төлбөр баталгаажвал худалдаж аваад дэлгүүрт холбоно
@@ -976,7 +985,7 @@ router.get("/domain/purchase/:id/status", async (req, res) => {
       return res.json({ status: r.status || "paid" });
     }
     res.json({ status: order.status });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Ангилал (Categories) ────────────────────────────────────────────────────
@@ -1008,7 +1017,7 @@ router.get("/categories", async (req, res) => {
     }
 
     res.json({ categories: categories.map(c => ({ ...c, productCount: countMap[c.name] || 0 })) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/categories
@@ -1030,7 +1039,7 @@ router.post("/categories", async (req, res) => {
       data: { storeId: store.id, orgId: req.org.orgId, name, slug, image: image || null, sortOrder: count },
     });
     res.json({ category: cat });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // PATCH /store/categories/:id
@@ -1047,7 +1056,7 @@ router.patch("/categories/:id", async (req, res) => {
 
     const updated = await prisma.storeCategory.update({ where: { id: req.params.id }, data });
     res.json({ category: updated });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // DELETE /store/categories/:id
@@ -1059,7 +1068,7 @@ router.delete("/categories/:id", async (req, res) => {
 
     await prisma.storeCategory.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Зураг upload ───────────────────────────────────────────────────────────
@@ -1111,7 +1120,7 @@ router.post("/cron/expire", async (req, res) => {
     });
 
     res.json({ ok: true, expiredCount: expired.count });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Subscription & Wallet ──────────────────────────────────────────────────
@@ -1153,7 +1162,7 @@ router.get("/subscription", async (req, res) => {
       transactions: txs,
       price: WEB_PLAN_PRICE,
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/subscription/topup — хэтэвч цэнэглэх QPay invoice
@@ -1193,7 +1202,7 @@ router.post("/subscription/topup", async (req, res) => {
       qr_image: inv.qr_image,
       urls: inv.urls,
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/subscription/topup/:txId/check — төлбөр шалгах
@@ -1213,7 +1222,7 @@ router.post("/subscription/topup/:txId/check", async (req, res) => {
     const wallet = await prisma.webWallet.findUnique({ where: { orgId: req.org.orgId } });
 
     res.json({ status: "PAID", balance: wallet?.balance ?? 0 });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /store/subscription/activate — хэтэвчээс хасаж 1 сар сунгах
@@ -1253,7 +1262,7 @@ router.post("/subscription/activate", async (req, res) => {
     ]);
 
     res.json({ ok: true, webExpiresAt: newEnd });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 module.exports = router;

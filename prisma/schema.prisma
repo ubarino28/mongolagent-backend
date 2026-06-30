@@ -125,6 +125,8 @@ model TuruuUnanswered {
   psid      String?
   resolved  Boolean  @default(false)
   createdAt DateTime @default(now())
+
+  @@index([orgId, resolved])
 }
 
 model TuruuLead {
@@ -141,6 +143,8 @@ model TuruuLead {
   notes           String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  @@index([orgId, createdAt])
 }
 
 model TuruuConsultation {
@@ -154,6 +158,8 @@ model TuruuConsultation {
   preferredTime   String?
   status          String   @default("PENDING")
   createdAt       DateTime @default(now())
+
+  @@index([orgId])
 }
 
 model TuruuOrder {
@@ -201,6 +207,8 @@ model TuruuKnowledge {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([orgId, active])
 }
 
 model TuruuStaff {
@@ -216,6 +224,8 @@ model TuruuStaff {
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
   appointments TuruuAppointment[]
+
+  @@index([orgId])
 }
 
 model TuruuAppointment {
@@ -240,6 +250,9 @@ model TuruuAppointment {
   notes           String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
+
+  @@index([orgId, date])
+  @@index([staffId])
 }
 
 // ─────────────────────────────────────────────
@@ -259,6 +272,8 @@ model TuruuMenuItem {
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([orgId, isActive])
 }
 
 model TuruuTable {
@@ -270,6 +285,8 @@ model TuruuTable {
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
   reservations TuruuReservation[]
+
+  @@index([orgId])
 }
 
 model TuruuReservation {
@@ -287,6 +304,8 @@ model TuruuReservation {
   notes         String?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
+
+  @@index([orgId, date])
 }
 
 // ─────────────────────────────────────────────
@@ -353,6 +372,7 @@ model StoreCategory {
   updatedAt DateTime @updatedAt
 
   @@unique([storeId, slug])
+  @@index([orgId])
 }
 
 model Product {

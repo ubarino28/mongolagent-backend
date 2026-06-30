@@ -13,6 +13,9 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
 
 const express = require("express");
 const cors = require("cors");
+// Бүх axios дуудлагад глобал timeout (QPay/Facebook/Telegram/Vercel) — гадны API удааширвал
+// хүсэлт хязгааргүй гацахаас сэргийлнэ (axios-ийн анхдагч = timeout байхгүй).
+require("axios").defaults.timeout = 20000;
 const webhookRouter = require("./routes/webhook.routes");
 const adminRouter = require("./routes/admin.routes");
 const authRouter = require("./routes/auth.routes");
@@ -21,6 +24,21 @@ const storeRouter = require("./routes/store.routes");
 const storefrontRouter = require("./routes/storefront.routes");
 
 const app = express();
+
+// Express version-ийг ил гаргахгүй (fingerprint багасгана)
+app.disable("x-powered-by");
+
+// Аюулгүй байдлын HTTP толгойнууд (helmet хамаарал нэмэхгүйгээр гар аргаар).
+// API хариунд clickjacking/MIME-sniff/HTTPS downgrade-аас сэргийлнэ.
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-DNS-Prefetch-Control", "off");
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  next();
+});
 
 // Auto-migrate: ensure new columns exist without dropping data
 const { getPrisma } = require("./lib/db");
@@ -126,9 +144,27 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(express.json());
+// Body хэмжээг хязгаарлана — асар том JSON-оор санах ой дүүргэх DoS-оос сэргийлнэ.
+// rawBody-г хадгална — Facebook webhook-ийн HMAC (X-Hub-Signature-256) шалгахад хэрэгтэй.
+app.use(express.json({
+  limit: "1mb",
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 
-app.get("/health", (req, res) => res.json({ ok: true, service: "mongolagent-backend", version: "2026-06-23-v6-restaurant-always" }));
+app.get("/health", async (req, res) => {
+  // DB-г бодитоор шалгана — DB унасан ч "ok" буцаах хуурамч эрүүл байдлаас сэргийлнэ.
+  // 3с-ийн дотор хариу ирэхгүй бол 503 (DB гацсан гэж үзнэ).
+  try {
+    const prisma = getPrisma();
+    await Promise.race([
+      prisma.$queryRaw`SELECT 1`,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("db timeout")), 3000)),
+    ]);
+    res.json({ ok: true, service: "mongolagent-backend", version: "2026-06-23-v6-restaurant-always" });
+  } catch {
+    res.status(503).json({ ok: false, error: "db unavailable" });
+  }
+});
 
 app.use("/webhook", webhookRouter);
 app.use("/admin", adminRouter);

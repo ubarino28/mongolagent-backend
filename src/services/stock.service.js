@@ -17,8 +17,10 @@ async function decrementStockForOrder(prisma, order) {
         where: { id, stock: { gte: qty } },
         data: { stock: { decrement: qty } },
       });
-      // Нөөц хүрэлцэхгүй байсан бол 0 болгоно (хасуу болгохгүй)
+      // Нөөц хүрэлцэхгүй байсан бол 0 болгоно (хасуу болгохгүй) — зэрэг 2 захиалга хэт зарсан
+      // тохиолдол. Худалдагч мэдэхийн тулд анхааруулга бичнэ.
       if (r.count === 0) {
+        console.warn(`[stock] OVERSELL — product ${id} нөөц хүрэлцсэнгүй (qty=${qty}), 0 болгов. Захиалга ${order.id}`);
         await prisma.product.updateMany({ where: { id, stock: { gt: 0 } }, data: { stock: 0 } });
       }
     } catch (e) {

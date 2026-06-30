@@ -2,10 +2,13 @@
 const { getPrisma } = require("../lib/db");
 const axios = require("axios");
 
+// AI tool-аас ирэх мөрийг хязгаарлана — урт payload-оор DB bloat хийхээс сэргийлнэ
+const C = (s, n = 200) => (typeof s === "string" ? s.slice(0, n) : s);
+
 async function saveLead({ psid, orgId = null, name, phone, email, company, serviceInterest, budget, notes }) {
   const prisma = getPrisma();
   const lead = await prisma.turuuLead.create({
-    data: { psid, orgId, name, phone, email, company, serviceInterest, budget, notes },
+    data: { psid, orgId, name: C(name, 120), phone: C(phone, 32), email: C(email, 160), company: C(company, 160), serviceInterest: C(serviceInterest, 200), budget: C(budget, 80), notes: C(notes, 1000) },
   });
 
   // Telegram мэдэгдэл — org-ийн token эсвэл глобал token ашиглана
@@ -17,7 +20,7 @@ async function saveLead({ psid, orgId = null, name, phone, email, company, servi
 async function saveConsultation({ psid, orgId = null, name, phone, email, serviceInterest, preferredTime }) {
   const prisma = getPrisma();
   const c = await prisma.turuuConsultation.create({
-    data: { psid, orgId, name, phone, email, serviceInterest, preferredTime },
+    data: { psid, orgId, name: C(name, 120), phone: C(phone, 32), email: C(email, 160), serviceInterest: C(serviceInterest, 200), preferredTime: C(preferredTime, 120) },
   });
 
   const { botToken, chatId } = await getTelegramConfig(orgId);
@@ -49,6 +52,13 @@ async function notifyTelegram(title, data, botToken, chatId) {
 async function saveOrder({ psid, orgId = null, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes, payOnPickup = false }) {
   const prisma = getPrisma();
 
+  // Sanity: AI tool-аас ирэх тоо хэмжээ/дүнг хязгаарлана — буруу/санаатай гажуудал (сөрөг,
+  // NaN, 10000 ширхэг г.м)-аас сэргийлнэ.
+  if (Array.isArray(items)) {
+    items = items.map((i) => ({ ...i, qty: Math.max(1, Math.min(999, Math.floor(Number(i?.qty) || 1))) }));
+  }
+  if (!Number.isFinite(Number(totalAmount)) || Number(totalAmount) < 0) totalAmount = 0;
+
   // Очиж авахдаа төлнө — notes-д тэмдэглэж эзэнд (dashboard + Telegram) харагдуулна
   if (payOnPickup) {
     const suffix = "Очиж авахдаа төлнө";
@@ -69,7 +79,7 @@ async function saveOrder({ psid, orgId = null, customerName, customerPhone, cust
   }
 
   const order = await prisma.turuuOrder.create({
-    data: { psid, orgId, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes },
+    data: { psid, orgId, customerName: C(customerName, 120), customerPhone: C(customerPhone, 32), customerEmail: C(customerEmail, 160), deliveryAddress: C(deliveryAddress, 400), items, totalAmount, notes: C(notes, 1000) },
   });
 
   const { botToken, chatId } = await getTelegramConfig(orgId);

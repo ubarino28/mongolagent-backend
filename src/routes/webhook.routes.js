@@ -1,11 +1,50 @@
 "use strict";
 const express = require("express");
+const crypto = require("crypto");
 const { processMessage, processImageMessage } = require("../services/ai.service");
 const { sendText, sendTypingOn } = require("../services/facebook.service");
 const { getPrisma } = require("../lib/db");
 const { checkPayment } = require("../services/qpay.service");
+const { rateLimit } = require("../middleware/rateLimit");
+const telegram = require("../services/telegram.service");
 
 const router = express.Router();
+
+// Payment callback-уудыг нөөц (orderId/orgId)-оор нь тусад нь хязгаарлана — нэг invoice-ийн
+// webhook-ийг мянга дахин дуудаж QPay checkPayment-ийг үнэгүй ачаалах abuse-аас сэргийлнэ.
+// QPay жинхэнэ callback нэг invoice-д цөөн удаа л ирдэг тул 30/мин хангалттай.
+const whLimit = rateLimit({ windowMs: 60_000, max: 30, key: (req) => `wh:${req.originalUrl.split("?")[0]}` });
+
+if (!process.env.FB_APP_SECRET) {
+  console.warn("[webhook] FB_APP_SECRET тохируулаагүй — Facebook webhook HMAC шалгалт идэвхгүй. Хуурамч webhook-оос сэргийлэхийн тулд тохируулна уу.");
+}
+
+const { timingEqual } = require("../lib/timingEqual");
+
+// Facebook webhook-ийн X-Hub-Signature-256 (HMAC-SHA256) шалгана.
+// FB_APP_SECRET тохируулаагүй бол алгасна (амьд интеграцыг эвдэхгүй) — тохируулсан бол ШАХНА.
+function fbSignatureValid(req) {
+  const appSecret = process.env.FB_APP_SECRET;
+  if (!appSecret) return true;
+  const sig = req.get("x-hub-signature-256");
+  if (!sig || !sig.startsWith("sha256=")) return false;
+  const expected = "sha256=" + crypto.createHmac("sha256", appSecret)
+    .update(req.rawBody || Buffer.from(""))
+    .digest("hex");
+  try {
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  } catch { return false; }
+}
+
+// QPay payment/check хариунаас бодит төлсөн дүн хүлээгдсэн дүнд хүрсэн эсэх.
+// paid_amount тодорхойгүй (хуучин/өөр формат) бол блоклохгүй — статусаар шийднэ (false-negative-аас сэргийлнэ).
+function paidEnough(result, expected) {
+  const exp = Number(expected);
+  if (!exp || exp <= 0) return true;
+  const paid = Number(result?.paid_amount);
+  if (!Number.isFinite(paid) || paid <= 0) return true;
+  return paid + 1 >= exp; // 1₮ бөөрөнхийллийн зөрүү тэвчинэ
+}
 
 // Facebook webhook verification
 router.get("/", (req, res) => {
@@ -13,7 +52,7 @@ router.get("/", (req, res) => {
   const token     = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  if (mode === "subscribe" && token === process.env.FB_VERIFY_TOKEN) {
+  if (mode === "subscribe" && timingEqual(token, process.env.FB_VERIFY_TOKEN)) {
     console.log("[webhook] verified ✅");
     return res.status(200).send(challenge);
   }
@@ -22,6 +61,9 @@ router.get("/", (req, res) => {
 
 // Incoming messages
 router.post("/", (req, res) => {
+  // Facebook-оос ирсэн эсэхийг HMAC-аар баталгаажуулна — хуурамч мессеж/AI-cost abuse-аас сэргийлнэ
+  if (!fbSignatureValid(req)) return res.sendStatus(403);
+
   const body = req.body;
   if (body.object !== "page") return res.sendStatus(404);
 
@@ -73,8 +115,10 @@ router.post("/", (req, res) => {
         const audioAttachment = event.message?.attachments?.find((a) => a.type === "audio");
         if (audioAttachment?.payload?.url) {
           try {
+            const { transcribeAudio, convAllowed } = require("../services/ai.service");
+            // Анти-спам: Whisper (төлбөртэй) дуудахаас өмнө throttle шалгана
+            if (!convAllowed(orgId, psid)) continue;
             await sendTypingOn(psid, token);
-            const { transcribeAudio } = require("../services/ai.service");
             const transcript = await transcribeAudio(audioAttachment.payload.url);
             if (transcript) {
               const reply = await processMessage(psid, transcript, orgId);
@@ -125,7 +169,7 @@ router.post("/", (req, res) => {
 });
 
 // QPay payment callback — POST /webhook/qpay/:orderId
-router.post("/qpay/:orderId", async (req, res) => {
+router.post("/qpay/:orderId", whLimit, async (req, res) => {
   // QPay-д хурдан 200 хариулна
   res.json({ ok: true });
 
@@ -138,26 +182,24 @@ router.post("/qpay/:orderId", async (req, res) => {
       const result = await checkPayment(order.qpayInvoiceId);
       const paid = result.invoice_status === "PAID";
       if (!paid) return;
+      // Төлсөн дүн захиалгын дүнд хүрээгүй бол PAID болгохгүй (доогуур төлөлтөөс сэргийлнэ)
+      if (!paidEnough(result, order.totalAmount)) {
+        console.warn(`[QPay] Order ${order.id} underpaid — paid_amount=${result.paid_amount}, expected=${order.totalAmount}`);
+        return;
+      }
 
-      await prisma.turuuOrder.update({
-        where: { id: order.id },
+      // Идемпотент — зөвхөн PENDING→PAID шилжүүлсэн ганц хүсэлт цааш үргэлжилнэ (давхар мэдэгдэлгүй)
+      const upd = await prisma.turuuOrder.updateMany({
+        where: { id: order.id, qpayStatus: { not: "PAID" }, status: { not: "PAID" } },
         data: { qpayStatus: "PAID", status: "PAID" },
       });
+      if (upd.count !== 1) return;
 
       // Telegram мэдэгдэл
       if (order.orgId) {
         try {
-          const org = await prisma.organization.findUnique({
-            where: { id: order.orgId },
-            select: { telegramBotToken: true, telegramChatId: true },
-          });
-          const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
-          const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
-          if (botToken && chatId) {
-            const axios = require("axios");
-            const text = `✅ QPay төлбөр хийгдлээ!\nЗахиалга #${order.id.slice(-6).toUpperCase()}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}`;
-            await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
-          }
+          const text = `✅ QPay төлбөр хийгдлээ!\nЗахиалга #${order.id.slice(-6).toUpperCase()}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}`;
+          await telegram.notifyText(order.orgId, text);
         } catch { /* non-blocking */ }
       }
 
@@ -187,7 +229,7 @@ router.post("/qpay/:orderId", async (req, res) => {
 });
 
 // Store (website builder) QPay callback — POST /webhook/qpay-store/:orderId
-router.post("/qpay-store/:orderId", async (req, res) => {
+router.post("/qpay-store/:orderId", whLimit, async (req, res) => {
   res.json({ ok: true });
 
   setImmediate(async () => {
@@ -198,6 +240,10 @@ router.post("/qpay-store/:orderId", async (req, res) => {
 
       const result = await checkPayment(order.qpayInvoiceId);
       if (result.invoice_status !== "PAID") return;
+      if (!paidEnough(result, order.totalAmount)) {
+        console.warn(`[QPay-store] Order ${order.id} underpaid — paid_amount=${result.paid_amount}, expected=${order.totalAmount}`);
+        return;
+      }
 
       // Идемпотент — нөөц/купон зөвхөн нэг удаа. Аль хэдийн боловсруулсан бол давхар мэдэгдэхгүй.
       const { markStoreOrderPaid } = require("../services/payment.service");
@@ -206,17 +252,8 @@ router.post("/qpay-store/:orderId", async (req, res) => {
 
       // Telegram мэдэгдэл
       try {
-        const org = await prisma.organization.findUnique({
-          where: { id: order.orgId },
-          select: { telegramBotToken: true, telegramChatId: true },
-        });
-        const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
-        const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
-        if (botToken && chatId) {
-          const axios = require("axios");
-          const text = `🛒 Дэлгүүрийн захиалга төлөгдлөө!\nЗахиалга #${order.id.slice(-6).toUpperCase()}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}\nУтас: ${order.customerPhone || "—"}`;
-          await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
-        }
+        const text = `🛒 Дэлгүүрийн захиалга төлөгдлөө!\nЗахиалга #${order.id.slice(-6).toUpperCase()}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}\nУтас: ${order.customerPhone || "—"}`;
+        await telegram.notifyText(order.orgId, text);
       } catch { /* non-blocking */ }
 
       console.log(`[QPay-store] Order ${order.id} PAID`);
@@ -227,7 +264,7 @@ router.post("/qpay-store/:orderId", async (req, res) => {
 });
 
 // Appointment QPay callback — POST /webhook/qpay-appointment/:appointmentId
-router.post("/qpay-appointment/:appointmentId", async (req, res) => {
+router.post("/qpay-appointment/:appointmentId", whLimit, async (req, res) => {
   res.json({ ok: true });
 
   setImmediate(async () => {
@@ -242,26 +279,23 @@ router.post("/qpay-appointment/:appointmentId", async (req, res) => {
       const result = await checkPayment(appt.qpayInvoiceId);
       const paid = result.invoice_status === "PAID";
       if (!paid) return;
+      if (!paidEnough(result, appt.depositAmount)) {
+        console.warn(`[QPay] Appointment ${appt.id} underpaid — paid_amount=${result.paid_amount}, expected=${appt.depositAmount}`);
+        return;
+      }
 
-      await prisma.turuuAppointment.update({
-        where: { id: appt.id },
+      // Идемпотент — зөвхөн анхны шилжилт цааш үргэлжилнэ (давхар мэдэгдэлгүй)
+      const updAppt = await prisma.turuuAppointment.updateMany({
+        where: { id: appt.id, depositStatus: { not: "PAID" } },
         data: { qpayStatus: "PAID", depositStatus: "PAID", status: "CONFIRMED" },
       });
+      if (updAppt.count !== 1) return;
 
       // Telegram мэдэгдэл
       if (appt.orgId) {
         try {
-          const org = await prisma.organization.findUnique({
-            where: { id: appt.orgId },
-            select: { telegramBotToken: true, telegramChatId: true },
-          });
-          const botToken = org?.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
-          const chatId = org?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
-          if (botToken && chatId) {
-            const axios = require("axios");
-            const text = `✅ Урьдчилгаа төлөгдлөө!\n${appt.staff?.name || "—"} · ${appt.serviceName}\n📅 ${appt.date} ${appt.timeSlot}\n💰 ₮${Number(appt.depositAmount || 0).toLocaleString()}\n👤 ${appt.customerName || "—"}`;
-            await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
-          }
+          const text = `✅ Урьдчилгаа төлөгдлөө!\n${appt.staff?.name || "—"} · ${appt.serviceName}\n📅 ${appt.date} ${appt.timeSlot}\n💰 ₮${Number(appt.depositAmount || 0).toLocaleString()}\n👤 ${appt.customerName || "—"}`;
+          await telegram.notifyText(appt.orgId, text);
         } catch { /* non-blocking */ }
       }
 
@@ -291,7 +325,7 @@ router.post("/qpay-appointment/:appointmentId", async (req, res) => {
 });
 
 // Subscription QPay callback — POST /webhook/sub-qpay/:orgId
-router.post("/sub-qpay/:orgId", async (req, res) => {
+router.post("/sub-qpay/:orgId", whLimit, async (req, res) => {
   res.json({ ok: true });
 
   setImmediate(async () => {
@@ -314,20 +348,18 @@ router.post("/sub-qpay/:orgId", async (req, res) => {
       const base = org.subscriptionEndsAt && new Date(org.subscriptionEndsAt) > now ? new Date(org.subscriptionEndsAt) : now;
       const subscriptionEndsAt = new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-      await prisma.organization.update({
-        where: { id: org.id },
+      // Идемпотент — зөвхөн ЭНЭ invoice-ийг боловсруулсан ганц хүсэлт амжилттай болно.
+      // subInvoiceId=null болгосноор зэрэг ирсэн 2 webhook давхар 30 хоног нэмэхээс сэргийлнэ.
+      const updOrg = await prisma.organization.updateMany({
+        where: { id: org.id, subInvoiceId: org.subInvoiceId, subQpayStatus: { not: "PAID" } },
         data: { subQpayStatus: "PAID", subscriptionEndsAt, status: "active", subInvoiceId: null },
       });
+      if (updOrg.count !== 1) return;
 
-      // Telegram мэдэгдэл — платформ admin-д
+      // Telegram мэдэгдэл — платформ admin-д (env бот). notifyText(null) → платформын env ашиглана.
       try {
-        const botToken = process.env.TELEGRAM_BOT_TOKEN;
-        const chatId   = process.env.TELEGRAM_CHAT_ID;
-        if (botToken && chatId) {
-          const axios = require("axios");
-          const text = `💰 Subscription төлбөр хийгдлээ!\nКлиент: ${org.name}\nДуусах огноо: ${subscriptionEndsAt.toLocaleDateString("mn-MN")}`;
-          await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
-        }
+        const text = `💰 Subscription төлбөр хийгдлээ!\nКлиент: ${org.name}\nДуусах огноо: ${subscriptionEndsAt.toLocaleDateString("mn-MN")}`;
+        await telegram.notifyText(null, text);
       } catch { /* non-blocking */ }
 
       console.log(`[SubQPay] Org ${org.id} subscription renewed`);
@@ -338,7 +370,7 @@ router.post("/sub-qpay/:orgId", async (req, res) => {
 });
 
 // Template purchase QPay callback — POST /webhook/template-qpay/:orgId/:templateId
-router.post("/template-qpay/:orgId/:templateId", async (req, res) => {
+router.post("/template-qpay/:orgId/:templateId", whLimit, async (req, res) => {
   res.json({ ok: true });
 
   setImmediate(async () => {
@@ -354,11 +386,16 @@ router.post("/template-qpay/:orgId/:templateId", async (req, res) => {
       const result = await subQpay.checkPayment(purchase.invoiceId);
       const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID" || result.invoice_status === "PAID";
       if (!paid) return;
+      if (!paidEnough(result, purchase.amount)) {
+        console.warn(`[TemplateQPay] ${orgId}/${templateId} underpaid — paid_amount=${result.paid_amount}, expected=${purchase.amount}`);
+        return;
+      }
 
-      await prisma.templatePurchase.update({
-        where: { orgId_templateId: { orgId, templateId } },
+      const updTpl = await prisma.templatePurchase.updateMany({
+        where: { orgId, templateId, status: { not: "PAID" } },
         data: { status: "PAID" },
       });
+      if (updTpl.count !== 1) return;
       console.log(`[TemplateQPay] Org ${orgId} purchased template ${templateId}`);
     } catch (err) {
       console.error("[TemplateQPay callback]", err.message);
@@ -367,7 +404,7 @@ router.post("/template-qpay/:orgId/:templateId", async (req, res) => {
 });
 
 // Website wallet topup QPay callback — POST /webhook/web-wallet/:orgId
-router.post("/web-wallet/:orgId", async (req, res) => {
+router.post("/web-wallet/:orgId", whLimit, async (req, res) => {
   res.json({ ok: true });
 
   setImmediate(async () => {
@@ -384,7 +421,7 @@ router.post("/web-wallet/:orgId", async (req, res) => {
         if (!tx.qpayInvoiceId) continue;
         const result = await subQpay.checkPayment(tx.qpayInvoiceId);
         const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
-        if (paid && await applyWalletTopup(prisma, tx)) {
+        if (paid && paidEnough(result, tx.amount) && await applyWalletTopup(prisma, tx)) {
           console.log(`[WebWallet] Org ${req.params.orgId} topped up ${tx.amount}₮`);
         }
       }
@@ -398,7 +435,7 @@ router.post("/web-wallet/:orgId", async (req, res) => {
 // createDomainInvoice нь энэ URL-ийг callback болгож өгдөг. Өмнө энэ route байхгүй
 // байсан тул tab хаагдвал төлбөр авагдсан ч домэйн БҮРТГЭГДДЭГГҮЙ байв.
 // Одоо webhook домэйнг сервер талд ИДЕМПОТЕНТоор бүртгэнэ (polling-той зөрчилгүй).
-router.post("/domain-qpay/:orgId", async (req, res) => {
+router.post("/domain-qpay/:orgId", whLimit, async (req, res) => {
   res.json({ ok: true });
 
   setImmediate(async () => {
@@ -418,6 +455,10 @@ router.post("/domain-qpay/:orgId", async (req, res) => {
         const result = await subQpay.checkPayment(order.qpayInvoiceId);
         const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID" || result.invoice_status === "PAID";
         if (!paid) continue;
+        if (!paidEnough(result, order.priceMnt)) {
+          console.warn(`[Domain] Order ${order.id} underpaid — paid_amount=${result.paid_amount}, expected=${order.priceMnt}`);
+          continue;
+        }
         const r = await fulfillDomainOrder(prisma, { vdomains, vercel }, order);
         console.log(`[Domain] Org ${req.params.orgId} domain ${order.domain} → ${r.status}`);
       }

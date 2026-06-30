@@ -1,18 +1,28 @@
 "use strict";
 const OpenAI = require("openai");
 const { buildSystemPrompt } = require("../lib/prompt");
+const cache = require("../lib/cache");
+
+// System prompt-ийг 60с кэшилнэ — мессеж бүрт turuuSettings-ийг DB-ээс уншихаас сэргийлнэ
+// (өндөр ачаалалд DB query огцом буурна). Тохиргоо засагдвал invalidatePrompt-оор цэвэрлэнэ.
+function cachedSystemPrompt(isNew, orgId) {
+  if (!orgId) return buildSystemPrompt(isNew, orgId);
+  return cache.getOrSet(`prompt:${orgId}:${isNew ? 1 : 0}`, 60_000, () => buildSystemPrompt(isNew, orgId));
+}
+function invalidatePrompt(orgId) { cache.del(`prompt:${orgId}`); }
 const { getHistory, saveHistory, isNewConversation } = require("../lib/history");
 const { saveLead, saveConsultation, saveOrder, saveAppointment } = require("./lead.service");
 const { getPrisma } = require("../lib/db");
 
 let openai;
 function getOpenAI() {
-  if (!openai) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  // timeout — OpenAI удааширвал webhook гацахаас сэргийлнэ (default 600с хэт урт);
+  // maxRetries 1 — түр алдаанд нэг дахин оролдоно.
+  if (!openai) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30000, maxRetries: 1 });
   return openai;
 }
 
-const PLAN_QUOTA = { starter: 7000, growth: 15000, business: 30000, enterprise: 70000 };
-const PLAN_NEXT  = { starter: "Growth", growth: "Business", business: "Enterprise" };
+const { PLAN_QUOTA, PLAN_NEXT } = require("../lib/quotas");
 
 // Текстийг normalize хийх (тэмдэгт арилгах, жижиглэх)
 function normalizeText(s) {
@@ -66,17 +76,36 @@ async function findExactMatch(orgId, userText) {
 // Message тоолох — cache hit болон normal дуудлага хоёуланд ашиглана
 async function incrementMessageUsed(orgId, prisma) {
   try {
-    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { quotaResetAt: true } });
     const now = new Date();
-    const needsReset = !org?.quotaResetAt || now >= new Date(org.quotaResetAt);
-    if (needsReset) {
-      const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-      await prisma.organization.update({ where: { id: orgId }, data: { messageUsed: 1, quotaResetAt: nextReset } });
-    } else {
+    const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    // ATOMIC: хугацаа дууссан бол зөвхөн НЭГ зэрэгцээ хүсэлт reset хийнэ (count=1);
+    // бусад нь нөхцөл таарахгүй (count=0) → энгийн increment. Race-д тоо алдагдахгүй.
+    const reset = await prisma.organization.updateMany({
+      where: { id: orgId, OR: [{ quotaResetAt: null }, { quotaResetAt: { lte: now } }] },
+      data: { messageUsed: 1, quotaResetAt: nextReset },
+    });
+    if (reset.count === 0) {
       await prisma.organization.update({ where: { id: orgId }, data: { messageUsed: { increment: 1 } } });
     }
   } catch { /* non-blocking */ }
 }
+
+// Анти-спам / cost-abuse throttle — нэг харилцан яриа (orgId+psid) богино хугацаанд хэт олон
+// мессеж явуулж OpenAI зардал шатаахаас сэргийлнэ. Санах ойд, instance тус бүрт.
+const _convThrottle = new Map(); // key -> { count, reset }
+function convAllowed(orgId, psid, max = 12, windowMs = 60_000) {
+  if (!psid) return true;
+  const key = `${orgId || "_"}:${psid}`;
+  const now = Date.now();
+  let e = _convThrottle.get(key);
+  if (!e || now > e.reset) { e = { count: 0, reset: now + windowMs }; _convThrottle.set(key, e); }
+  e.count++;
+  return e.count <= max;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, e] of _convThrottle) if (now > e.reset) _convThrottle.delete(k);
+}, 5 * 60_000).unref?.();
 
 // KB-с хайлт хийх — GPT query-г normalize хийсний дараа дуудна
 // Буцаах нь { text, variantImages } — text нь tool-result-д, variantImages нь
@@ -415,13 +444,20 @@ const pendingMessages = new Map();
 const processingQueues = new Map();
 const DEBOUNCE_MS = 3000;
 
+// psid тус бүрийн дарааллыг гинжлэх + идэвхгүй болоход кэшээс цэвэрлэх (санах ой алдагдахаас сэргийлнэ)
+function chainQueue(psid, work) {
+  if (!processingQueues.has(psid)) processingQueues.set(psid, Promise.resolve());
+  const next = processingQueues.get(psid).then(work);
+  const guarded = next.catch(() => {});
+  processingQueues.set(psid, guarded);
+  guarded.finally(() => { if (processingQueues.get(psid) === guarded) processingQueues.delete(psid); });
+  return next;
+}
+
 function queuedProcessMessage(psid, userText, orgId, imageUrl = null) {
   // Зурагтай мессежийг debounce хийхгүй — шууд боловсруулна
   if (imageUrl) {
-    if (!processingQueues.has(psid)) processingQueues.set(psid, Promise.resolve());
-    const next = processingQueues.get(psid).then(() => processMessage(psid, userText, orgId, imageUrl));
-    processingQueues.set(psid, next.catch(() => {}));
-    return next;
+    return chainQueue(psid, () => processMessage(psid, userText, orgId, imageUrl));
   }
 
   return new Promise((resolve) => {
@@ -440,9 +476,7 @@ function queuedProcessMessage(psid, userText, orgId, imageUrl = null) {
       pendingMessages.delete(psid);
       const combined = texts.join("\n");
 
-      if (!processingQueues.has(psid)) processingQueues.set(psid, Promise.resolve());
-      const next = processingQueues.get(psid).then(() => processMessage(psid, combined, oid));
-      processingQueues.set(psid, next.catch(() => {}));
+      const next = chainQueue(psid, () => processMessage(psid, combined, oid));
       next.then((result) => { resolvers[0](result); for (let i = 1; i < resolvers.length; i++) resolvers[i](null); }).catch(() => resolvers.forEach((r) => r(null)));
     }, DEBOUNCE_MS);
   });
@@ -468,6 +502,9 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
     }
   } catch { /* proceed */ }
 
+  // Анти-спам/cost-abuse — нэг хэрэглэгч (psid) хэт хурдан спам бичвэл OpenAI дуудахгүй чимээгүй өнгөрнө
+  if (!convAllowed(orgId, psid)) return null;
+
   // Emoji дангаар → яриаг context-оор нь ойлгож хариулахгүй бол квот үрэнэ
   // Тиймээс emoji-г алгасахгүй, AI-д дамжуулна — history-тэй учир context мэдэж зохицоно
 
@@ -489,7 +526,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
     loadAISettings(orgId),
   ]);
 
-  let systemPrompt = await buildSystemPrompt(isNew, orgId);
+  let systemPrompt = await cachedSystemPrompt(isNew, orgId);
 
   // Upsell hint — квот 80%+ бол нэмэх
   if (orgId) {
@@ -499,7 +536,14 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         select: { plan: true, messageUsed: true },
       });
       const quota = PLAN_QUOTA[org.plan] || 10000;
-      const pct = Math.round(((org.messageUsed || 0) / quota) * 100);
+      const used = org.messageUsed || 0;
+      // Runaway-cost circuit breaker — quota-аас 3 дахин их бол OpenAI дуудахаа зогсооно.
+      // Жирийн бизнест хүрэхгүй өндөр; зөвхөн ноцтой abuse/алдаанаас платформын зардлыг хамгаална.
+      if (used >= quota * 3) {
+        console.warn(`[ai] org ${orgId} hard cost-cap hit (used=${used}, quota=${quota}) — AI хариу зогсоов`);
+        return null;
+      }
+      const pct = Math.round((used / quota) * 100);
       const nextPlan = PLAN_NEXT[org.plan];
       if (pct >= 80 && nextPlan) {
         systemPrompt += `\n\n[ДОТООД: Энэ org-ийн мессежийн эрх ${pct}% дүүрсэн. Байгалийн яриа дотор боломжтой үед ${nextPlan} план руу upgrade хийхийг зөөлнөөр санал болго.]`;
@@ -1062,6 +1106,8 @@ async function classifyImage(imageUrl, captionText) {
 // төлбөрийн баримт бол processReceiptImage, бараа/бүтээгдэхүүний зураг бол
 // vision-той чат руу (processMessage) дамжуулна — жишээ нь "энэ ямар өнгөтэй байгаа?"
 async function processImageMessage(psid, imageUrl, captionText, orgId = null) {
+  // Анти-спам/cost-abuse — vision (classifyImage) дуудахаас өмнө throttle шалгана
+  if (!convAllowed(orgId, psid)) return null;
   const classification = await classifyImage(imageUrl, captionText);
   if (classification === "receipt") {
     return processReceiptImage(psid, imageUrl, orgId);
@@ -1090,4 +1136,4 @@ async function transcribeAudio(audioUrl) {
   }
 }
 
-module.exports = { processMessage: queuedProcessMessage, processReceiptImage, processImageMessage, transcribeAudio };
+module.exports = { processMessage: queuedProcessMessage, processReceiptImage, processImageMessage, transcribeAudio, invalidatePrompt, convAllowed };

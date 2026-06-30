@@ -5,7 +5,9 @@ const qpay = require("../services/qpay.service");
 const { decrementStockForOrder } = require("../services/stock.service");
 const { markStoreOrderPaid } = require("../services/payment.service");
 const { rateLimit } = require("../middleware/rateLimit");
-const checkoutLimiter = rateLimit({ windowMs: 60_000, max: 12 }); // checkout/discount spam-аас
+const cache = require("../lib/cache");
+const checkoutLimiter = rateLimit({ windowMs: 60_000, max: 12 }); // checkout spam-аас
+const discountLimiter = rateLimit({ windowMs: 60_000, max: 6 }); // купон код brute-force/enumeration-аас
 const reviewLimiter = rateLimit({ windowMs: 60_000, max: 6 }); // сэтгэгдэл спам-аас
 
 const router = express.Router();
@@ -70,33 +72,40 @@ async function evalDiscount(prisma, storeId, code, subtotal) {
 router.get("/site", async (req, res) => {
   try {
     const prisma = getPrisma();
-    const store = await resolveStore(prisma, { host: req.query.host, slug: req.query.slug });
-    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
-    if (store.status !== "published") return res.status(404).json({ error: "Дэлгүүр нийтлэгдээгүй байна" });
+    // Нийтийн дэлгүүрийн дата зочин бүрт DB цохихгүйн тулд 30с кэшилнэ.
+    // Editor өөрчлөлт хамгийн ихдээ 30с-ийн дотор харагдана.
+    const key = `site:${String(req.query.host || "").toLowerCase()}|${String(req.query.slug || "").toLowerCase()}`;
+    const payload = await cache.getOrSet(key, 30_000, async () => {
+      const store = await resolveStore(prisma, { host: req.query.host, slug: req.query.slug });
+      if (!store || store.status !== "published") return { _notfound: true };
 
-    const [pages, products] = await Promise.all([
-      prisma.storePage.findMany({ where: { storeId: store.id, published: true }, orderBy: { sortOrder: "asc" } }),
-      prisma.product.findMany({ where: { storeId: store.id, active: true }, orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }] }),
-    ]);
+      const [pages, products] = await Promise.all([
+        prisma.storePage.findMany({ where: { storeId: store.id, published: true }, orderBy: { sortOrder: "asc" } }),
+        prisma.product.findMany({ where: { storeId: store.id, active: true }, orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }] }),
+      ]);
 
-    res.json({
-      store: {
-        id: store.id,
-        name: store.name,
-        slug: store.slug,
-        theme: store.theme,
-        layout: store.layout || {},
-        currency: store.currency,
-        templateId: store.templateId,
-        phone: store.phone,
-        email: store.email,
-        address: store.address,
-        delivery: store.delivery || {},
-      },
-      pages,
-      products: products.map(publicProduct),
+      return {
+        store: {
+          id: store.id,
+          name: store.name,
+          slug: store.slug,
+          theme: store.theme,
+          layout: store.layout || {},
+          currency: store.currency,
+          templateId: store.templateId,
+          phone: store.phone,
+          email: store.email,
+          address: store.address,
+          delivery: store.delivery || {},
+        },
+        pages,
+        products: products.map(publicProduct),
+      };
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+
+    if (payload._notfound) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    res.json(payload);
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // GET /storefront/:slug/categories
@@ -107,7 +116,7 @@ router.get("/:slug/categories", async (req, res) => {
     if (!store || store.status !== "published") return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
     const categories = await prisma.storeCategory.findMany({ where: { storeId: store.id }, orderBy: { sortOrder: "asc" } });
     res.json({ categories });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // GET /storefront/:slug/products
@@ -118,7 +127,7 @@ router.get("/:slug/products", async (req, res) => {
     if (!store || store.status !== "published") return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
     const products = await prisma.product.findMany({ where: { storeId: store.id, active: true }, orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }] });
     res.json({ products: products.map(publicProduct) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // GET /storefront/:slug/product/:id
@@ -130,14 +139,14 @@ router.get("/:slug/product/:id", async (req, res) => {
     const product = await prisma.product.findFirst({ where: { id: req.params.id, storeId: store.id, active: true } });
     if (!product) return res.status(404).json({ error: "Бараа олдсонгүй" });
     res.json({ product: publicProduct(product) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // ─── Checkout ─────────────────────────────────────────────────────────────────
 
 // POST /storefront/:slug/validate-discount — сагсан дээр купон шалгах
 // body: { code, subtotal }
-router.post("/:slug/validate-discount", checkoutLimiter, async (req, res) => {
+router.post("/:slug/validate-discount", discountLimiter, async (req, res) => {
   try {
     const prisma = getPrisma();
     const store = await prisma.store.findUnique({ where: { slug: String(req.params.slug).toLowerCase() }, select: { id: true, status: true } });
@@ -145,7 +154,7 @@ router.post("/:slug/validate-discount", checkoutLimiter, async (req, res) => {
     const r = await evalDiscount(prisma, store.id, req.body.code, Math.max(0, Number(req.body.subtotal) || 0));
     if (!r.ok) return res.status(400).json({ error: r.error });
     res.json({ ok: true, code: r.discount.code, type: r.discount.type, value: r.discount.value, amount: r.amount });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /storefront/:slug/checkout
@@ -254,7 +263,7 @@ router.post("/:slug/checkout", checkoutLimiter, async (req, res) => {
       order: { id: order.id, totalAmount: total, subtotal, discountAmount, discountCode: order.discountCode, deliveryFee, deliveryMethod: dmethod, items: lineItems },
       payment: { invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls || [] },
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // GET /storefront/order/:id — захиалгын төлөв + товч мэдээлэл (хянах хуудсанд)
@@ -279,7 +288,7 @@ router.get("/order/:id", async (req, res) => {
         createdAt: o.createdAt,
       },
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // GET /storefront/order/:id/status — төлбөрийн төлөв шалгах (polling)
@@ -300,7 +309,7 @@ router.get("/order/:id/status", async (req, res) => {
       return res.json({ status: "PAID", orderStatus: "PAID" });
     }
     res.json({ status: "PENDING", orderStatus: order.status });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // GET /storefront/:slug/product/:productId/reviews — батлагдсан сэтгэгдэл + дундаж үнэлгээ
@@ -318,7 +327,7 @@ router.get("/:slug/product/:productId/reviews", async (req, res) => {
     const count = reviews.length;
     const avg = count ? reviews.reduce((s, r) => s + r.rating, 0) / count : 0;
     res.json({ reviews, count, avg: Math.round(avg * 10) / 10 });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 // POST /storefront/:slug/reviews — сэтгэгдэл үлдээх (нийтийн)
@@ -345,7 +354,7 @@ router.post("/:slug/reviews", reviewLimiter, async (req, res) => {
       select: { id: true, customerName: true, rating: true, comment: true, createdAt: true },
     });
     res.json({ review });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
 module.exports = router;

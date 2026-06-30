@@ -8,7 +8,7 @@ function authMiddleware(req, res, next) {
 
   const token = auth.slice(7);
   try {
-    const payload = jwt.verify(token, jwtSecret());
+    const payload = jwt.verify(token, jwtSecret(), { algorithms: ["HS256"] });
     // ЗААВАЛ admin claim шалгана — энгийн хэрэглэгчийн token-оор admin болохоос сэргийлнэ
     if (payload.admin !== true) return res.status(403).json({ error: "Forbidden" });
     req.admin = payload;

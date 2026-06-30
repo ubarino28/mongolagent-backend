@@ -9,6 +9,30 @@ const { jwtSecret } = require("../lib/jwtSecret");
 const { rateLimit } = require("../middleware/rateLimit");
 const authLimiter = rateLimit({ windowMs: 60_000, max: 10 }); // 1 минутад 10 оролдлого
 
+// Email-тус бүрийн амжилтгүй нэвтрэлтийн lockout — IP rate-limit дээр НЭМЭЛТ хамгаалалт.
+// Олон IP ашигладаг credential-stuffing-ийн эсрэг (нэг IP-ийн limit-ийг тойрох гэсэн).
+const _loginFails = new Map(); // email -> { count, until }
+const LOCK_MAX = 8;            // 15 минутын дотор 8 удаа буруу → түгжинэ
+const LOCK_MS = 15 * 60_000;
+function loginLocked(email) {
+  const e = _loginFails.get(String(email || "").toLowerCase());
+  return !!(e && e.until && Date.now() < e.until);
+}
+function recordLoginFail(email) {
+  const key = String(email || "").toLowerCase();
+  const now = Date.now();
+  let e = _loginFails.get(key);
+  if (!e || (e.until && now > e.until)) e = { count: 0, until: 0 };
+  e.count++;
+  if (e.count >= LOCK_MAX) { e.until = now + LOCK_MS; e.count = 0; }
+  _loginFails.set(key, e);
+}
+function clearLoginFail(email) { _loginFails.delete(String(email || "").toLowerCase()); }
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, e] of _loginFails) if (e.until && now > e.until) _loginFails.delete(k);
+}, 10 * 60_000).unref?.();
+
 const router = express.Router();
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -19,7 +43,7 @@ function signToken(org) {
   return jwt.sign(
     { orgId: org.id, slug: org.slug, name: org.name, plan: org.plan, role: "owner" },
     jwtSecret(),
-    { expiresIn: "30d" }
+    { expiresIn: "7d" }
   );
 }
 
@@ -28,7 +52,7 @@ function signStaffToken(staff, org) {
   return jwt.sign(
     { orgId: org.id, slug: org.slug, name: staff.name, plan: org.plan, role: staff.role, staffId: staff.id },
     jwtSecret(),
-    { expiresIn: "30d" }
+    { expiresIn: "7d" }
   );
 }
 
@@ -37,14 +61,14 @@ router.post("/register", authLimiter, async (req, res) => {
   try {
     const { name, email, password } = req.body;
     if (!name || !email || !password) return res.status(400).json({ error: "name, email, password шаардлагатай" });
-    if (password.length < 6) return res.status(400).json({ error: "Нууц үг хамгийн багадаа 6 тэмдэгт байна" });
+    if (password.length < 8) return res.status(400).json({ error: "Нууц үг хамгийн багадаа 8 тэмдэгт байна" });
 
     const prisma = getPrisma();
     const existing = await prisma.organization.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: "Энэ имэйл бүртгэлтэй байна" });
 
     const slug = email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "") + "-" + Date.now().toString(36);
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, 12);
 
     const trialEnds = new Date();
     trialEnds.setDate(trialEnds.getDate() + 30);
@@ -56,7 +80,7 @@ router.post("/register", authLimiter, async (req, res) => {
     const token = signToken(org);
     res.json({ token, org: { id: org.id, name: org.name, slug: org.slug, email: org.email, plan: org.plan } });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") });
   }
 });
 
@@ -66,27 +90,32 @@ router.post("/login", authLimiter, async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: "email, password шаардлагатай" });
 
+    // Хэт олон буруу оролдлогын дараа тухайн email-ийг түр түгжинэ
+    if (loginLocked(email)) return res.status(429).json({ error: "Хэт олон буруу оролдлого. 15 минутын дараа дахин оролдоно уу." });
+
     const prisma = getPrisma();
     const org = await prisma.organization.findUnique({ where: { email } });
     if (org) {
       if (org.status !== "active") return res.status(403).json({ error: "Бүртгэл идэвхгүй байна" });
       const valid = await bcrypt.compare(password, org.passwordHash);
-      if (!valid) return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" });
+      if (!valid) { recordLoginFail(email); return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" }); }
+      clearLoginFail(email);
       const token = signToken(org);
       return res.json({ token, org: { id: org.id, name: org.name, slug: org.slug, email: org.email, plan: org.plan, fbPageId: org.fbPageId, role: "owner" } });
     }
 
     // Org биш бол — ажилтны нэвтрэлт (additive, org урсгалыг хөндөхгүй)
     const staff = await prisma.staffMember.findUnique({ where: { email } });
-    if (!staff || staff.status !== "active") return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" });
+    if (!staff || staff.status !== "active") { recordLoginFail(email); return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" }); }
     const sValid = await bcrypt.compare(password, staff.passwordHash);
-    if (!sValid) return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" });
+    if (!sValid) { recordLoginFail(email); return res.status(401).json({ error: "Имэйл эсвэл нууц үг буруу" }); }
     const parentOrg = await prisma.organization.findUnique({ where: { id: staff.orgId } });
     if (!parentOrg || parentOrg.status !== "active") return res.status(403).json({ error: "Бүртгэл идэвхгүй байна" });
+    clearLoginFail(email);
     const token = signStaffToken(staff, parentOrg);
     res.json({ token, org: { id: parentOrg.id, name: staff.name, slug: parentOrg.slug, email: staff.email, plan: parentOrg.plan, role: staff.role, staffId: staff.id } });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") });
   }
 });
 
@@ -143,7 +172,7 @@ router.post("/forgot-password", authLimiter, async (req, res) => {
 
     res.json({ message: "Нууц үг шинэчлэх холбоос имэйлд илгээгдлээ" });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") });
   }
 });
 
@@ -152,7 +181,7 @@ router.post("/reset-password", authLimiter, async (req, res) => {
   try {
     const { token, password } = req.body;
     if (!token || !password) return res.status(400).json({ error: "token, password шаардлагатай" });
-    if (password.length < 6) return res.status(400).json({ error: "Нууц үг хамгийн багадаа 6 тэмдэгт байна" });
+    if (password.length < 8) return res.status(400).json({ error: "Нууц үг хамгийн багадаа 8 тэмдэгт байна" });
 
     const prisma = getPrisma();
     const resetToken = await prisma.passwordResetToken.findUnique({ where: { token } });
@@ -161,7 +190,7 @@ router.post("/reset-password", authLimiter, async (req, res) => {
     if (resetToken.used) return res.status(400).json({ error: "Энэ холбоос аль хэдийн ашиглагдсан байна" });
     if (new Date() > resetToken.expiresAt) return res.status(400).json({ error: "Холбоосны хугацаа дууссан байна. Дахин хүсэлт илгээнэ үү" });
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, 12);
 
     await prisma.organization.update({
       where: { email: resetToken.email },
@@ -175,7 +204,7 @@ router.post("/reset-password", authLimiter, async (req, res) => {
 
     res.json({ message: "Нууц үг амжилттай шинэчлэгдлээ" });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") });
   }
 });
 
@@ -185,7 +214,7 @@ router.get("/me", async (req, res) => {
     const auth = req.headers.authorization;
     if (!auth?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
     const token = auth.slice(7);
-    const payload = jwt.verify(token, jwtSecret());
+    const payload = jwt.verify(token, jwtSecret(), { algorithms: ["HS256"] });
     if (!payload.orgId) return res.status(401).json({ error: "Invalid" });
 
     const prisma = getPrisma();
