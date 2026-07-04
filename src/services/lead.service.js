@@ -53,6 +53,15 @@ async function notifyTelegram(title, data, botToken, chatId) {
 async function saveOrder({ psid, orgId = null, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes, payOnPickup = false }) {
   const prisma = getPrisma();
 
+  // Хамгаалалт: AI баталгаажуулалтгүйгээр хоосон эсвэл placeholder ("Таны нэр"/"Таны утас")
+  // нэр/утсаар захиалга үүсгэхийг хориглоно — алдаа буцаавал AI дахин нэр/утас асууна.
+  const phoneDigits = (customerPhone || "").replace(/\D/g, "");
+  const nameTrim = (customerName || "").trim();
+  const placeholderRe = /таны\s*(нэр|утас)|^(нэр|утас|нэрээ|утсаа|customer|name|phone)$/i;
+  if (!nameTrim || placeholderRe.test(nameTrim) || phoneDigits.length < 8) {
+    throw new Error("Захиалга бүртгэхийн тулд хэрэглэгчийн бодит нэр болон 8 оронтой утасны дугаарыг эхлээд авна уу.");
+  }
+
   // Sanity: AI tool-аас ирэх тоо хэмжээ/дүнг хязгаарлана — буруу/санаатай гажуудал (сөрөг,
   // NaN, 10000 ширхэг г.м)-аас сэргийлнэ.
   if (Array.isArray(items)) {

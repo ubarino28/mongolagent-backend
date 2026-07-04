@@ -41,4 +41,28 @@ async function clientAuthMiddleware(req, res, next) {
   }
 }
 
-module.exports = { clientAuthMiddleware };
+// Токен зарцуулах route-д ЗӨВХӨН: эрх/хугацаа (subscription/trial) дууссан org-ийг блоклоно.
+// Dashboard хандалтыг хаахгүй — зөвхөн OpenAI дуудах үйлдлийг (тест чат, builder, import).
+const { isOrgExpired } = require("../lib/quota");
+const expiryCache = new Map(); // orgId -> { expired, exp }
+async function blockIfExpired(req, res, next) {
+  const orgId = req.org?.orgId;
+  if (!orgId) return next();
+  const now = Date.now();
+  const cached = expiryCache.get(orgId);
+  let expired;
+  if (cached && now < cached.exp) {
+    expired = cached.expired;
+  } else {
+    try {
+      const prisma = getPrisma();
+      const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { status: true, subscriptionEndsAt: true } });
+      expired = isOrgExpired(org);
+      expiryCache.set(orgId, { expired, exp: now + TTL });
+    } catch { expired = false; } // DB алдаа гарвал блоклохгүй (outage-аас сэргийлнэ)
+  }
+  if (expired) return res.status(403).json({ error: "Багцын хугацаа дууссан байна. Үргэлжлүүлэхийн тулд багцаа сунгана уу.", code: "SUBSCRIPTION_EXPIRED" });
+  next();
+}
+
+module.exports = { clientAuthMiddleware, blockIfExpired };
