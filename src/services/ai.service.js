@@ -6,9 +6,9 @@ const { decrypt } = require("../lib/secretCrypto");
 
 // System prompt-ийг 60с кэшилнэ — мессеж бүрт turuuSettings-ийг DB-ээс уншихаас сэргийлнэ
 // (өндөр ачаалалд DB query огцом буурна). Тохиргоо засагдвал invalidatePrompt-оор цэвэрлэнэ.
-function cachedSystemPrompt(isNew, orgId) {
-  if (!orgId) return buildSystemPrompt(isNew, orgId);
-  return cache.getOrSet(`prompt:${orgId}:${isNew ? 1 : 0}`, 60_000, () => buildSystemPrompt(isNew, orgId));
+function cachedSystemPrompt(isNew, orgId, hasImage = false) {
+  if (!orgId) return buildSystemPrompt(isNew, orgId, hasImage);
+  return cache.getOrSet(`prompt:${orgId}:${isNew ? 1 : 0}:${hasImage ? 1 : 0}`, 60_000, () => buildSystemPrompt(isNew, orgId, hasImage));
 }
 function invalidatePrompt(orgId) { cache.del(`prompt:${orgId}`); }
 const { getHistory, saveHistory, isNewConversation } = require("../lib/history");
@@ -24,6 +24,7 @@ function getOpenAI() {
 }
 
 const { PLAN_QUOTA, PLAN_NEXT } = require("../lib/quotas");
+const { isOrgExpired } = require("../lib/quota");
 
 // Текстийг normalize хийх (тэмдэгт арилгах, жижиглэх)
 function normalizeText(s) {
@@ -422,6 +423,32 @@ const TOOLS = [
   },
 ];
 
+// ── Tool-ийг бизнес төрлөөр шүүх — тухайн төрөлд ХЭРЭГГҮЙ tool-уудыг илгээхгүй (токен хэмнэнэ) ──
+// Зөвхөн ТОДОРХОЙ (order/appointment/table урсгал нь мэдэгдэж буй) төрлүүдийг шүүнэ.
+// "other"/тодорхойгүй төрөл → бүх tool (аюулгүй тал, ямар ч урсгалыг дэмжинэ).
+const TOOL_ALWAYS = ["search_knowledge", "save_lead", "save_consultation", "flag_unanswered", "request_handoff"];
+const TOOLS_BY_TYPE = {
+  shop:       [...TOOL_ALWAYS, "check_menu", "save_order", "check_order", "confirm_payment"],
+  restaurant: [...TOOL_ALWAYS, "check_menu", "save_order", "check_order", "confirm_payment", "check_tables", "save_reservation", "cancel_reservation"],
+  salon:      [...TOOL_ALWAYS, "check_staff", "check_availability", "save_appointment", "reschedule_appointment"],
+  clinic:     [...TOOL_ALWAYS, "check_staff", "check_availability", "save_appointment", "reschedule_appointment"],
+  service:    [...TOOL_ALWAYS, "check_staff", "check_availability", "save_appointment", "reschedule_appointment"],
+};
+function toolsForType(businessType) {
+  const names = TOOLS_BY_TYPE[businessType];
+  return names ? TOOLS.filter((t) => names.includes(t.function.name)) : TOOLS;
+}
+// business_type-ийг 60с кэшилнэ (prompt cache-тэй ижил хугацаа)
+function cachedBusinessType(orgId) {
+  if (!orgId) return Promise.resolve(null);
+  return cache.getOrSet(`bt:${orgId}`, 60_000, async () => {
+    try {
+      const row = await getPrisma().turuuSettings.findUnique({ where: { orgId_key: { orgId, key: "business_type" } } });
+      return row?.value || null;
+    } catch { return null; }
+  });
+}
+
 async function loadAISettings(orgId = null) {
   try {
     const prisma = getPrisma();
@@ -506,6 +533,14 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   // Анти-спам/cost-abuse — нэг хэрэглэгч (psid) хэт хурдан спам бичвэл OpenAI дуудахгүй чимээгүй өнгөрнө
   if (!convAllowed(orgId, psid)) return null;
 
+  // Эрх/хугацаа дууссан бол токен зарцуулах бүх үйлдлийг блоклоно — AI хариу өгөхгүй (чимээгүй)
+  if (orgId) {
+    try {
+      const o = await prisma.organization.findUnique({ where: { id: orgId }, select: { status: true, subscriptionEndsAt: true } });
+      if (isOrgExpired(o)) { console.warn(`[ai] org ${orgId} эрх/хугацаа дууссан — AI хариу зогсоов`); return null; }
+    } catch { /* алдаа гарвал үргэлжлүүлнэ */ }
+  }
+
   // Emoji дангаар → яриаг context-оор нь ойлгож хариулахгүй бол квот үрэнэ
   // Тиймээс emoji-г алгасахгүй, AI-д дамжуулна — history-тэй учир context мэдэж зохицоно
 
@@ -527,7 +562,10 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
     loadAISettings(orgId),
   ]);
 
-  let systemPrompt = await cachedSystemPrompt(isNew, orgId);
+  let systemPrompt = await cachedSystemPrompt(isNew, orgId, !!imageUrl);
+  // Бизнес төрлөөр tool жагсаалтыг шүүнэ — хэрэггүй tool илгээхгүй (токен хэмнэнэ)
+  const businessType = await cachedBusinessType(orgId);
+  const activeTools = toolsForType(businessType);
 
   // Upsell hint — квот 80%+ бол нэмэх
   if (orgId) {
@@ -569,7 +607,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   const response = await getOpenAI().chat.completions.create({
     model:       aiSettings.model,
     messages,
-    tools:       TOOLS,
+    tools:       activeTools,
     tool_choice: "auto",
     temperature: aiSettings.temperature,
     max_tokens:  aiSettings.max_tokens,
@@ -707,7 +745,9 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
           if (reqDate < today) {
             toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ availableSlots: [], reason: "Өнгөрсөн огноо — ирээдүйн өдөр сонгоно уу" }) });
           } else {
-          const staff = await prisma.turuuStaff.findFirst({ where: { id: staffId, orgId, isActive: true } });
+          let staff = await prisma.turuuStaff.findFirst({ where: { id: staffId, orgId, isActive: true } });
+          // Модел ID-ийн оронд нэр дамжуулсан бол нэрээр нь ол (prompt-д ID байдаггүй тул түгээмэл)
+          if (!staff) staff = await prisma.turuuStaff.findFirst({ where: { name: staffId, orgId, isActive: true } });
           if (!staff) {
             toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ error: "Мастер олдсонгүй" }) });
           } else {
@@ -719,7 +759,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
               toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ availableSlots: [], reason: "Тухайн өдөр амарна" }) });
             } else {
               const booked = await prisma.turuuAppointment.findMany({
-                where: { staffId, date, status: { not: "CANCELLED" } },
+                where: { staffId: staff.id, date, status: { not: "CANCELLED" } },
                 select: { timeSlot: true },
               });
               const bookedTimes = new Set(booked.map((b) => b.timeSlot));
@@ -768,9 +808,14 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
 
       } else if (toolCall.function.name === "save_appointment") {
         try {
-          const appt = await saveAppointment({ psid, orgId, ...args });
+          // staffId нэрээр ирсэн бол бодит ID руу хөрвүүлнэ (prompt-д ID байдаггүй)
+          let sid = args.staffId, sName = args.staffName;
+          let st = await prisma.turuuStaff.findFirst({ where: { id: sid, orgId, isActive: true }, select: { id: true, name: true } });
+          if (!st) st = await prisma.turuuStaff.findFirst({ where: { name: sid, orgId, isActive: true }, select: { id: true, name: true } });
+          if (st) { sid = st.id; sName = sName || st.name; }
+          const appt = await saveAppointment({ psid, orgId, ...args, staffId: sid, staffName: sName });
           const result = { success: true, duplicate: appt.duplicate || false };
-          if (appt.qpayData) result.qpay = appt.qpayData;
+          if (appt.qpayData) { result.qpay = appt.qpayData; result.depositAmount = appt.depositAmount || args.depositAmount || 0; }
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify(result) });
         } catch (e) {
           toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: false, error: e.message }) });
@@ -792,10 +837,12 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
               const cat = (item.category || "").replace("Бүтээгдэхүүн / ", "").replace("Бүтээгдэхүүн", "Бусад") || "Бусад";
               if (!byCat[cat]) byCat[cat] = [];
               const price = (item.answer.match(/Үнэ:\s*([\d,]+)/) || [])[1];
-              byCat[cat].push(`${item.question}${price ? ` — ${price}₮` : ""}`);
+              const priceNum = price ? parseInt(price.replace(/,/g, ""), 10) : Infinity;
+              byCat[cat].push({ text: `${item.question}${price ? ` — ${price}₮` : ""}`, price: priceNum });
             }
             const categories = Object.keys(byCat);
-            const menu = categories.map((cat) => `【${cat}】\n${byCat[cat].join("\n")}`).join("\n\n");
+            // Ангилал доторх барааг үнээр өсөхөөр эрэмбэлнэ — "хамгийн хямд/үнэтэй" асуултад найдвартай
+            const menu = categories.map((cat) => `【${cat}】\n${byCat[cat].sort((a, b) => a.price - b.price).map((x) => x.text).join("\n")}`).join("\n\n");
             toolResults.push({ tool_call_id: toolCall.id, content: `Ангилалууд: ${categories.join(", ")}\n\n${menu}` });
           }
         } catch {
@@ -944,7 +991,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
     const followUp = await getOpenAI().chat.completions.create({
       model: aiSettings.model,
       messages: followUpMessages,
-      tools: TOOLS,
+      tools: activeTools,
       tool_choice: "auto",
       temperature: aiSettings.temperature,
       max_tokens:  512,

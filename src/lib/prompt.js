@@ -182,6 +182,7 @@ ${emojiOk ? "Emoji хэрэглэж болно 😊" : "Emoji ашиглахгү
   → check_menu дуудаж бүх барааг ангилалаар нь авна
   → "Манайд [ангилалууд] байна. Аль төрлийг сонирхож байна?" гэж товч танилцуул
   ✗ Ерөнхий "бараа" гэж search_knowledge-аар хайхгүй — check_menu ашиглана
+  → "Хамгийн хямд/үнэтэй [бараа] юу вэ?" гэвэл ч check_menu дуудна — жагсаалт үнээр эрэмбэлэгдсэн (эхнийх нь хамгийн хямд). Асуусан АНГИЛАЛ доторх эхний/сүүлийн барааг хэл. "хямд" гэж search_knowledge-аар ХАЙХГҮЙ
 
 Алхам 2 — Сонирхол тогтоогдсон (2+ асуулт асуусан):
   → "Дэлгэрэнгүй мэдээлэл явуулъя — утасны дугаараа үлдээнэ үү?"
@@ -258,6 +259,8 @@ save_order дараа: tool result-д qpayReady:true байвал qpayMessage-и
 ✗ Нэг мессежид 2+ асуулт асуухгүй
 ✗ KB-д БАЙХГҮЙ хямдралыг ӨӨРӨӨ зохиож хэлэхгүй (KB-д байгаа хямдралыг хэлж, хэрэглэж БОЛНО)
 ✗ Хэрэглэгч өгсөн нэр/утасыг дахин асуухгүй
+✗ save_order/save_appointment-г нэр БОЛОН утас (8 орон) аваагүй байхад дуудахгүй — хоосон эсвэл "Таны нэр"/"Таны утас" гэх placeholder-аар ХЭЗЭЭ Ч дуудахгүй
+✗ save_order-г баталгаажуулалтын ("Зөв үү?") ӨМНӨ дуудахгүй — эхлээд бараа+тоо+хүргэлт/очих+нэр+утас цуглуулж БАТАЛГААЖУУЛ, дараа нь л дуудна
 ✗ Чиглэлтэй холбоогүй асуултад: "Энэ манай чиглэлд хамаарахгүй байна"`;
 
   if (forbiddenTopics) p += `\n✗ Хориглосон: ${forbiddenTopics}`;
@@ -363,7 +366,7 @@ TOOL ДУУДАХ ДАРААЛАЛ
 
 // ─── SYSTEM PROMPT BUILDER ────────────────────────────────────────────────────
 
-async function buildSystemPrompt(isNew, orgId = null) {
+async function buildSystemPrompt(isNew, orgId = null, hasImage = false) {
   let bodyPrompt = null;
   let businessType = null;
 
@@ -515,7 +518,8 @@ ${lbl.appointment.toUpperCase()}
 7. БАТАЛГААЖУУЛ: "Цаг захиалгаа баталгаажуулна уу?\\n📅 [date] [timeSlot]\\n💆 ${lbl.staffCap}: [staffName]\\n✂️ Үйлчилгээ: [serviceName]\\n👤 [customerName]\\n📞 [customerPhone]\\nЗөв үү?"
 8. Баталгаажуулсны дараа save_appointment дуудна
 9. save_appointment амжилттай бол:
-   - qpay талбар байвал (урьдчилгаатай) → "Цагаа захиаллаа! Урьдчилгаа ₮[amount] төлнө үү 👇" гэж QPay холбоосуудыг жагсаан харуул. Төлбөр хийгдмэгц автоматаар баталгаажна гэж мэдэгд
+   - qpay талбар байвал (урьдчилгаатай) → "Цагаа захиаллаа! Урьдчилгаа [result-ийн depositAmount бодит тоо]₮-ийг доорх QPay-ээр төлнө үү 👇" гэж холбоосуудыг жагсаан харуул. Төлбөр хийгдмэгц баталгаажна гэж мэдэгд
+     ✗ "[amount]" гэх placeholder-ийг ХЭЗЭЭ Ч бичихгүй — result-д ирсэн depositAmount-ийн бодит тоог тавь
    - qpay талбар байхгүй бол (урьдчилгаагүй) → "Цагаа амжилттай захиаллаа! 🎉"
 10. save_appointment алдаа буцаавал (success: false) → хэрэглэгчид "Уучлаарай, тэр цаг захиалагдсан байна" гэж хэлээд check_availability дахин дуудаж шинэ чөлөөтэй цагуудыг санал болго
 ✗ check_availability дуудалгүй цаг санал болгохгүй
@@ -583,7 +587,22 @@ ${lbl.appointment.toUpperCase()} — УРЬДЧИЛСАН ХҮСЭЛТ
 → Олдоогүй: "Тэр дугаартай захиалга олдсонгүй"`;
   }
 
-  const parts = [body, imageBlock, variantImageBlock, visualMatchBlock];
+  // ── ОГНООНЫ КОНТЕКСТ — "маргааш/өнөөдөр"-ийг зөв огноо болгоно (Улаанбаатар цаг UTC+8) ──
+  const ub = new Date(Date.now() + 8 * 3600 * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  const fmtD = (d) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  const DOW = ["Ням", "Даваа", "Мягмар", "Лхагва", "Пүрэв", "Баасан", "Бямба"];
+  const dateBlock = `━━━━━━━━━━━━━━━━━━━━━━━━━
+ОГНОО (цаг захиалгад ЗААВАЛ баримтал)
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Өнөөдөр: ${fmtD(ub)} (${DOW[ub.getUTCDay()]} гараг)
+"Өнөөдөр"=${fmtD(ub)} · "Маргааш"=${fmtD(new Date(ub.getTime() + 86400000))} · "Нөгөөдөр"=${fmtD(new Date(ub.getTime() + 2 * 86400000))}
+✗ Огноог ӨӨРӨӨ зохиохгүй — check_availability/check_tables/save_appointment-д ЗӨВХӨН дээрх бодит огноог YYYY-MM-DD хэлбэрээр дамжуул. Он ЗААВАЛ ${ub.getUTCFullYear()} ба түүнээс дээш.`;
+
+  const parts = [body, dateBlock];
+  // Зургийн 3 блок (~737 токен) зөвхөн хэрэглэгч зураг илгээсэн үед л хэрэгтэй —
+  // текст мессежид дэмий ачаа тул алгасна (токен хэмнэнэ).
+  if (hasImage) parts.push(imageBlock, variantImageBlock, visualMatchBlock);
   if (staffBlock) parts.push(staffBlock);
   if (appointmentBlock) parts.push(appointmentBlock);
   if (restaurantBlock) parts.push(restaurantBlock);

@@ -7,7 +7,7 @@ const { Resend } = require("resend");
 const multer = require("multer");
 const { createClient } = require("@supabase/supabase-js");
 const { getPrisma } = require("../lib/db");
-const { clientAuthMiddleware } = require("../middleware/clientAuth");
+const { clientAuthMiddleware, blockIfExpired } = require("../middleware/clientAuth");
 const { sendText } = require("../services/facebook.service");
 const { applySubscriptionPayment } = require("../services/payment.service");
 const { encrypt, decrypt } = require("../lib/secretCrypto");
@@ -560,7 +560,7 @@ function normalizeProductCategory(category) {
 }
 
 // POST /client/settings/builder — Builder AI: бизнесийн мэдээллээс мэдлэгийн сан үүсгэнэ
-router.post("/settings/builder", async (req, res) => {
+router.post("/settings/builder", blockIfExpired, async (req, res) => {
   try {
     const { message, history = [], imageUrl } = req.body;
     if (!message?.trim()) return res.status(400).json({ error: "message шаардлагатай" });
@@ -1568,10 +1568,10 @@ router.get("/billing", async (req, res) => {
     });
     const quota = PLAN_QUOTA[org.plan] || 10000;
     const PLANS = {
-      starter:    { name: "Starter",    price: 79900,  quota: 7000,  features: ["7,000 мессеж/сар", "Facebook Messenger AI", "Builder AI", "Мэдлэгийн сан (30)", "Lead цуглуулах", "Telegram мэдэгдэл"] },
-      growth:     { name: "Growth",     price: 149900, quota: 15000, features: ["15,000 мессеж/сар", "Захиалга + QPay", "Consultation захиалга", "+1 → DM автоматжуулалт", "PDF → KB", "Funnel analytics"] },
-      business:   { name: "Business",   price: 249900, quota: 30000, features: ["30,000 мессеж/сар", "Instagram канал", "Custom keyword → DM", "Хүний handoff", "AI тохиргоо", "Telegram дэмжлэг"] },
-      enterprise: { name: "Enterprise", price: 499900, quota: 70000, features: ["70,000 мессеж/сар", "Custom AI Chatbot", "Custom AI Agent", "Custom Website", "White label", "Олон хуудас + API"] },
+      starter:    { name: "Starter",    price: 59900,  quota: 2300,  features: ["2,300 мессеж/сар", "Facebook Messenger AI", "Builder AI", "Мэдлэгийн сан (100)", "Lead цуглуулах", "Telegram мэдэгдэл"] },
+      growth:     { name: "Growth",     price: 99900,  quota: 3800,  features: ["3,800 мессеж/сар", "Захиалга + QPay төлбөр", "Цаг захиалга + урьдчилгаа", "Instagram DM", "Хүн handoff", "+1 → DM · PDF/Excel → KB", "Funnel analytics"] },
+      business:   { name: "Business",   price: 179900, quota: 6900,  features: ["6,900 мессеж/сар", "Custom keyword → DM", "AI тохиргоо (model/tone)", "Мэдлэгийн сан (2,000)", "Priority Telegram дэмжлэг", "Дэвшилтэт analytics"] },
+      enterprise: { name: "Enterprise", price: 349900, quota: 13500, features: ["13,500 мессеж/сар", "Custom AI Chatbot", "Custom AI Agent", "Custom Website", "White label", "Олон хуудас + API"] },
     };
     res.json({ ...org, quota, messageUsed: org.messageUsed || 0, plans: PLANS, currentPlan: PLANS[org.plan] });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
@@ -1597,7 +1597,7 @@ router.post("/billing/pay", async (req, res) => {
     const { plan } = req.body;
     if (!plan) return res.status(400).json({ error: "plan шаардлагатай" });
 
-    const PLAN_PRICE = { starter: 79900, growth: 149900, business: 249900, enterprise: 499900 };
+    const PLAN_PRICE = { starter: 59900, growth: 99900, business: 179900, enterprise: 349900 };
     const PLAN_NAME  = { starter: "Starter", growth: "Growth", business: "Business", enterprise: "Enterprise" };
     const amount = PLAN_PRICE[plan];
     if (!amount) return res.status(400).json({ error: "Буруу план" });
@@ -1659,7 +1659,7 @@ router.post("/billing/pay/check", async (req, res) => {
 });
 
 // POST /client/chat
-router.post("/chat", async (req, res) => {
+router.post("/chat", blockIfExpired, async (req, res) => {
   try {
     const { message, history = [], imageUrl } = req.body;
     if (!message?.trim()) return res.status(400).json({ error: "message шаардлагатай" });
@@ -1681,7 +1681,7 @@ router.post("/chat", async (req, res) => {
       if (s.ai_max_tokens) aiSettings.max_tokens = parseInt(s.ai_max_tokens);
     } catch {}
 
-    const systemPrompt = await buildSystemPrompt(false, orgId);
+    const systemPrompt = await buildSystemPrompt(false, orgId, !!imageUrl);
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     const CHAT_TOOLS = [
@@ -1731,10 +1731,13 @@ router.post("/chat", async (req, res) => {
     const choice = response.choices[0];
     let reply = "";
     let replyImageUrl = null;
+    const toolsUsed = [];        // ТУР ЗУУР debug: ямар tool дуудсан
+    let followUpUsage = null;
 
     if (choice.finish_reason === "tool_calls") {
       const toolResults = [];
       for (const toolCall of choice.message.tool_calls) {
+        toolsUsed.push({ name: toolCall.function.name, args: toolCall.function.arguments });
         if (toolCall.function.name === "search_knowledge") {
           const { query } = JSON.parse(toolCall.function.arguments);
           const items = await prisma.turuuKnowledge.findMany({
@@ -1788,10 +1791,12 @@ router.post("/chat", async (req, res) => {
               const cat = (item.category || "").replace("Бүтээгдэхүүн / ", "").replace("Бүтээгдэхүүн", "Бусад") || "Бусад";
               if (!byCat[cat]) byCat[cat] = [];
               const price = (item.answer.match(/Үнэ:\s*([\d,]+)/) || [])[1];
-              byCat[cat].push(`${item.question}${price ? ` — ${price}₮` : ""}`);
+              const priceNum = price ? parseInt(price.replace(/,/g, ""), 10) : Infinity;
+              byCat[cat].push({ text: `${item.question}${price ? ` — ${price}₮` : ""}`, price: priceNum });
             }
             const categories = Object.keys(byCat);
-            const menu = categories.map((cat) => `【${cat}】\n${byCat[cat].join("\n")}`).join("\n\n");
+            // Ангилал доторх барааг үнээр өсөхөөр эрэмбэлнэ — "хамгийн хямд/үнэтэй" асуултад найдвартай
+            const menu = categories.map((cat) => `【${cat}】\n${byCat[cat].sort((a, b) => a.price - b.price).map((x) => x.text).join("\n")}`).join("\n\n");
             toolResults.push({ tool_call_id: toolCall.id, content: `Ангилалууд: ${categories.join(", ")}\n\n${menu}` });
           }
         }
@@ -1807,11 +1812,36 @@ router.post("/chat", async (req, res) => {
         max_tokens: 512,
       });
       reply = followUp.choices[0].message.content?.trim() || "";
+      followUpUsage = followUp.usage;
     } else {
       reply = choice.message.content?.trim() || "";
     }
 
-    res.json({ reply, ...(replyImageUrl ? { imageUrl: replyImageUrl } : {}) });
+    // Тест чат: сард эхний 100 мессеж ҮНЭГҮЙ, дараа нь 1 мессеж = 1 эрх
+    try {
+      const { bumpTestChatUsage, incrementMessageUsedBy } = require("../lib/quota");
+      const t = await bumpTestChatUsage(orgId);
+      if (!t.free) await incrementMessageUsedBy(orgId, 1);
+    } catch { /* non-blocking */ }
+
+    // ТУР ЗУУР — токен зарцуулалт ба ₮ өртөг (Тест чат дээр харуулах). gpt-4o-mini $/1M, USD/MNT ₮3,600
+    const RATE = { in: 0.15, cached: 0.075, out: 0.60 };
+    const u1 = response.usage || {};
+    const c1 = u1.prompt_tokens_details?.cached_tokens || 0;
+    const c2 = followUpUsage?.prompt_tokens_details?.cached_tokens || 0;
+    const inTok = ((u1.prompt_tokens || 0) - c1) + ((followUpUsage?.prompt_tokens || 0) - c2);
+    const cachedTok = c1 + c2;
+    const outTok = (u1.completion_tokens || 0) + (followUpUsage?.completion_tokens || 0);
+    const costMnt = (inTok * RATE.in + cachedTok * RATE.cached + outTok * RATE.out) / 1e6 * 3600;
+    const _debug = {
+      model: aiSettings.model,
+      tokens: { input: inTok, cached: cachedTok, output: outTok, total: inTok + cachedTok + outTok },
+      costMnt: Math.round(costMnt * 1000) / 1000,
+      tools: toolsUsed,
+      calls: followUpUsage ? 2 : 1,
+    };
+
+    res.json({ reply, ...(replyImageUrl ? { imageUrl: replyImageUrl } : {}), _debug });
   } catch (e) {
     res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") });
   }
@@ -2029,7 +2059,7 @@ function handlePdfUploadError(err, req, res, next) {
 }
 
 // POST /client/upload/pdf — PDF-аас Q&A автоматаар гаргаж KB-д нэмнэ
-router.post("/upload/pdf", pdfUpload.single("file"), handlePdfUploadError, async (req, res) => {
+router.post("/upload/pdf", blockIfExpired, pdfUpload.single("file"), handlePdfUploadError, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "file шаардлагатай" });
     if (req.file.mimetype !== "application/pdf") return res.status(400).json({ error: "Зөвхөн PDF файл оруулна уу" });
@@ -2074,6 +2104,8 @@ Category: Бүтээгдэхүүн | Үнэ | Хүргэлт | Процесс | 
         });
       }
     }
+    // PDF → KB импорт — тогтмол тоогоор квотоос хасна
+    try { const q = require("../lib/quota"); await q.incrementMessageUsedBy(orgId, q.PDF_IMPORT_COST); } catch { /* non-blocking */ }
     res.json({ ok: true, count: items.length });
   } catch (e) {
     console.error("[client/upload/pdf] Error:", e.message);
@@ -2122,7 +2154,7 @@ router.get("/upload/excel/template", async (req, res) => {
 });
 
 // POST /client/upload/excel — Excel-ээс бараа бөөнөөр KB-д импортлоно (шинэ нэмэх / ижил нэртэйг шинэчлэх)
-router.post("/upload/excel", excelUpload.single("file"), handleExcelUploadError, async (req, res) => {
+router.post("/upload/excel", blockIfExpired, excelUpload.single("file"), handleExcelUploadError, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "file шаардлагатай" });
 
@@ -2249,6 +2281,8 @@ JSON object хэлбэрт буцаа: {"<барааны нэр>": "<дэд ан
         const content = aiRes.choices[0].message.content?.trim() || "{}";
         const cleaned = content.replace(/^```json\n?/, "").replace(/\n?```$/, "");
         Object.assign(aiCategoryMap, JSON.parse(cleaned));
+        // Excel импорт (AI ангилал ажилласан үед) — тогтмол тоогоор квотоос хасна
+        try { const q = require("../lib/quota"); await q.incrementMessageUsedBy(orgId, q.EXCEL_IMPORT_COST); } catch { /* non-blocking */ }
       } catch (e) {
         console.error("[client/upload/excel] AI category error:", e.message);
       }
