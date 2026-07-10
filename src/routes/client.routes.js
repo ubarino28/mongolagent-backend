@@ -9,7 +9,7 @@ const { createClient } = require("@supabase/supabase-js");
 const { getPrisma } = require("../lib/db");
 const { clientAuthMiddleware, blockIfExpired } = require("../middleware/clientAuth");
 const { sendText } = require("../services/facebook.service");
-const { applySubscriptionPayment } = require("../services/payment.service");
+const { applySubscriptionPayment, applyTopupPayment } = require("../services/payment.service");
 const { encrypt, decrypt } = require("../lib/secretCrypto");
 
 const router = express.Router();
@@ -1375,7 +1375,16 @@ router.get("/quota", async (req, res) => {
       select: { plan: true, messageUsed: true, quotaResetAt: true },
     });
     const quota = PLAN_QUOTA[org.plan] || 10000;
-    res.json({ plan: org.plan, quota, messageUsed: org.messageUsed || 0, quotaResetAt: org.quotaResetAt });
+    const { getTopupRemaining } = require("../lib/quota");
+    const topup = await getTopupRemaining(req.org.orgId);   // үлдсэн нэмэлт message credit (persistent)
+    const used = org.messageUsed || 0;
+    const effectiveQuota = quota + topup;                    // base + топ-ап
+    res.json({
+      plan: org.plan, quota, messageUsed: used, quotaResetAt: org.quotaResetAt,
+      topup, effectiveQuota,
+      remaining: Math.max(0, effectiveQuota - used),
+      exhausted: used >= effectiveQuota,                      // 100% дүүрсэн → шинэ message блоклогдоно
+    });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
@@ -1438,7 +1447,67 @@ router.get("/analytics", async (req, res) => {
       period,
     };
 
-    res.json({ totalConversations, totalLeads, totalConsultations, totalOrders, newLeads, dailyMessages, dailyLeads, revenue });
+    // ── Trend (сүүлийн 30 хоног vs өмнөх 30 хоног), өдрийн цуваа (sparkline), топ бараа ──
+    const nowMs = Date.now();
+    const d30 = new Date(nowMs - 30 * 86400000);
+    const d60 = new Date(nowMs - 60 * 86400000);
+    const cur = { gte: d30 };
+    const prev = { gte: d60, lt: d30 };
+    const [
+      cChat, pChat, cLead, pLead, cCons, pCons, cOrd, pOrd,
+      dailyConsultations, dailyOrders, paidOrders,
+    ] = await Promise.all([
+      prisma.turuuChat.count({ where: { orgId, updatedAt: cur } }),
+      prisma.turuuChat.count({ where: { orgId, updatedAt: prev } }),
+      prisma.turuuLead.count({ where: { orgId, createdAt: cur } }),
+      prisma.turuuLead.count({ where: { orgId, createdAt: prev } }),
+      prisma.turuuConsultation.count({ where: { orgId, createdAt: cur } }),
+      prisma.turuuConsultation.count({ where: { orgId, createdAt: prev } }),
+      prisma.turuuOrder.count({ where: { orgId, createdAt: cur } }),
+      prisma.turuuOrder.count({ where: { orgId, createdAt: prev } }),
+      prisma.$queryRaw`
+        SELECT DATE("createdAt") as date, COUNT(*)::int as count
+        FROM "TuruuConsultation"
+        WHERE "orgId" = ${orgId} AND "createdAt" >= NOW() - INTERVAL '30 days'
+        GROUP BY DATE("createdAt") ORDER BY date ASC`,
+      prisma.$queryRaw`
+        SELECT DATE("createdAt") as date, COUNT(*)::int as count
+        FROM "TuruuOrder"
+        WHERE "orgId" = ${orgId} AND "createdAt" >= NOW() - INTERVAL '30 days'
+        GROUP BY DATE("createdAt") ORDER BY date ASC`,
+      // Топ бараа — сонгосон period-ийн PAID захиалгуудын items (хамгийн сүүлийн 1000)
+      prisma.turuuOrder.findMany({ where: { orgId, status: "PAID", ...dateWhere }, select: { items: true }, orderBy: { createdAt: "desc" }, take: 1000 }),
+    ]);
+
+    const pctDelta = (c, p) => (p === 0 ? (c > 0 ? 100 : 0) : Math.round(((c - p) / p) * 100));
+    const deltas = {
+      conversations: pctDelta(cChat, pChat),
+      leads:         pctDelta(cLead, pLead),
+      consultations: pctDelta(cCons, pCons),
+      orders:        pctDelta(cOrd, pOrd),
+    };
+
+    // items (JSON) массивыг барааны нэрээр нэгтгэж борлуулалт/ширхэгээр эрэмбэлнэ
+    const prodMap = {};
+    for (const o of paidOrders) {
+      const items = Array.isArray(o.items) ? o.items : [];
+      for (const it of items) {
+        const name = ((it && it.name) || "").toString().trim();
+        if (!name) continue;
+        const qty = Math.max(1, Math.floor(Number(it.qty) || 1));
+        const price = Math.max(0, Number(it.price) || 0);
+        if (!prodMap[name]) prodMap[name] = { name, units: 0, revenue: 0 };
+        prodMap[name].units += qty;
+        prodMap[name].revenue += qty * price;
+      }
+    }
+    const topProducts = Object.values(prodMap).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+
+    res.json({
+      totalConversations, totalLeads, totalConsultations, totalOrders, newLeads,
+      dailyMessages, dailyLeads, dailyConsultations, dailyOrders,
+      deltas, topProducts, revenue,
+    });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
@@ -1569,11 +1638,24 @@ router.get("/billing", async (req, res) => {
     const quota = PLAN_QUOTA[org.plan] || 10000;
     const PLANS = {
       starter:    { name: "Starter",    price: 59900,  quota: 2300,  features: ["2,300 мессеж/сар", "Facebook Messenger AI", "Builder AI", "Мэдлэгийн сан (100)", "Lead цуглуулах", "Telegram мэдэгдэл"] },
-      growth:     { name: "Growth",     price: 99900,  quota: 3800,  features: ["3,800 мессеж/сар", "Захиалга + QPay төлбөр", "Цаг захиалга + урьдчилгаа", "Instagram DM", "Хүн handoff", "+1 → DM · PDF/Excel → KB", "Funnel analytics"] },
+      growth:     { name: "Growth",     price: 99900,  quota: 3800,  features: ["3,800 мессеж/сар", "Захиалга + QPay төлбөр", "Цаг захиалга + урьдчилгаа", "Instagram DM", "Хүн handoff", "Автомат comment · PDF/Excel → KB", "Funnel analytics"] },
       business:   { name: "Business",   price: 179900, quota: 6900,  features: ["6,900 мессеж/сар", "Custom keyword → DM", "AI тохиргоо (model/tone)", "Мэдлэгийн сан (2,000)", "Priority Telegram дэмжлэг", "Дэвшилтэт analytics"] },
       enterprise: { name: "Enterprise", price: 349900, quota: 13500, features: ["13,500 мессеж/сар", "Custom AI Chatbot", "Custom AI Agent", "Custom Website", "White label", "Олон хуудас + API"] },
     };
-    res.json({ ...org, quota, messageUsed: org.messageUsed || 0, plans: PLANS, currentPlan: PLANS[org.plan] });
+    // Хугацаа бүрийн үнэ (сар/6сар/жил) нэмнэ — frontend toggle-д ашиглана
+    const { PLAN_PERIOD_PRICE, MESSAGE_TOPUP } = require("../lib/planPricing");
+    for (const k of Object.keys(PLANS)) PLANS[k].periods = PLAN_PERIOD_PRICE[k];
+    // Нэмэлт message багц + үлдсэн credit — limit тулбал "Нэмэлт message авах"-д ашиглана
+    const { getTopupRemaining } = require("../lib/quota");
+    const topup = await getTopupRemaining(req.org.orgId);
+    const used = org.messageUsed || 0;
+    const effectiveQuota = quota + topup;
+    const topupPacks = Object.keys(MESSAGE_TOPUP).map((u) => ({ units: parseInt(u, 10), price: MESSAGE_TOPUP[u] }));
+    res.json({
+      ...org, quota, messageUsed: used, plans: PLANS, currentPlan: PLANS[org.plan],
+      topup, effectiveQuota, remaining: Math.max(0, effectiveQuota - used), exhausted: used >= effectiveQuota,
+      topupPacks,
+    });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
@@ -1594,13 +1676,14 @@ router.post("/billing/upgrade", async (req, res) => {
 // POST /client/billing/pay — QPay subscription invoice үүсгэх
 router.post("/billing/pay", async (req, res) => {
   try {
-    const { plan } = req.body;
+    const { plan, period = "monthly" } = req.body;
     if (!plan) return res.status(400).json({ error: "plan шаардлагатай" });
 
-    const PLAN_PRICE = { starter: 59900, growth: 99900, business: 179900, enterprise: 349900 };
+    const { PERIOD_MONTHS, PERIOD_LABEL, periodTotal } = require("../lib/planPricing");
     const PLAN_NAME  = { starter: "Starter", growth: "Growth", business: "Business", enterprise: "Enterprise" };
-    const amount = PLAN_PRICE[plan];
-    if (!amount) return res.status(400).json({ error: "Буруу план" });
+    const months = PERIOD_MONTHS[period];
+    const amount = periodTotal(plan, period);
+    if (!amount || !months) return res.status(400).json({ error: "Буруу план эсвэл хугацаа" });
 
     const prisma = getPrisma();
     const org = await prisma.organization.findUnique({
@@ -1618,12 +1701,19 @@ router.post("/billing/pay", async (req, res) => {
       orgId: org.id,
       plan,
       amount,
-      description: `Mongol Agent — ${PLAN_NAME[plan]} план (1 сар)`,
+      description: `Mongol Agent — ${PLAN_NAME[plan]} план (${PERIOD_LABEL[period]})`,
     });
 
     await prisma.organization.update({
       where: { id: org.id },
       data: { subInvoiceId: result.invoice_id, subQpayStatus: "PENDING" },
+    });
+
+    // Хүлээгдэж буй план + хугацаа (сар)-ыг хадгална — төлбөр батлагдахад applySubscriptionPayment ашиглана
+    await prisma.turuuSettings.upsert({
+      where: { orgId_key: { orgId: org.id, key: "pending_subscription" } },
+      create: { orgId: org.id, key: "pending_subscription", value: JSON.stringify({ plan, months }) },
+      update: { value: JSON.stringify({ plan, months }) },
     });
 
     res.json({ ok: true, invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls });
@@ -1655,6 +1745,61 @@ router.post("/billing/pay/check", async (req, res) => {
     }
 
     res.json({ paid, result });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /client/billing/topup — Нэмэлт message багц (top-up) QPay invoice үүсгэх
+router.post("/billing/topup", async (req, res) => {
+  try {
+    const { size } = req.body;
+    const { topupPack } = require("../lib/planPricing");
+    const pack = topupPack(size);
+    if (!pack) return res.status(400).json({ error: "Буруу багц" });
+
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { id: true } });
+    const subQpay = require("../services/subscription-qpay.service");
+    const apiUrl = process.env.API_URL || "https://api.mongolagent.mn";
+    const result = await subQpay.createInvoice({
+      orgId: org.id,
+      plan: "topup",
+      amount: pack.price,
+      description: `Mongol Agent — Нэмэлт ${pack.units.toLocaleString()} мессеж`,
+      callbackUrl: `${apiUrl}/webhook/topup-qpay/${org.id}`, // subscription callback-аас ТУСДАА
+    });
+
+    // Хүлээгдэж буй топ-ап (invoiceId + units + amount)-ыг хадгална — төлбөр батлагдахад applyTopupPayment ашиглана
+    await prisma.turuuSettings.upsert({
+      where: { orgId_key: { orgId: org.id, key: "pending_topup" } },
+      create: { orgId: org.id, key: "pending_topup", value: JSON.stringify({ invoiceId: result.invoice_id, units: pack.units, amount: pack.price }) },
+      update: { value: JSON.stringify({ invoiceId: result.invoice_id, units: pack.units, amount: pack.price }) },
+    });
+
+    res.json({ ok: true, invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls, units: pack.units, amount: pack.price });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /client/billing/topup/check — Нэмэлт message төлбөр шалгах
+router.post("/billing/topup/check", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const s = await prisma.turuuSettings.findUnique({ where: { orgId_key: { orgId, key: "pending_topup" } } });
+    // pending байхгүй → webhook аль хэдийн боловсруулж credit нэмсэн байх магадлалтай
+    if (!s || !s.value) return res.json({ paid: true, alreadyApplied: true });
+    let pending;
+    try { pending = JSON.parse(s.value); } catch { return res.status(400).json({ error: "Буруу төлөв" }); }
+    if (!pending.invoiceId) return res.status(400).json({ error: "Invoice байхгүй" });
+
+    const subQpay = require("../services/subscription-qpay.service");
+    const result = await subQpay.checkPayment(pending.invoiceId);
+    const paid = result.invoice_status === "PAID" || (result.count != null && result.count > 0) || result.payment_status === "PAID";
+
+    if (paid) {
+      const { applied, added, remaining } = await applyTopupPayment(prisma, orgId);
+      return res.json({ paid: true, applied, added, remaining });
+    }
+    res.json({ paid: false });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
@@ -1731,13 +1876,10 @@ router.post("/chat", blockIfExpired, async (req, res) => {
     const choice = response.choices[0];
     let reply = "";
     let replyImageUrl = null;
-    const toolsUsed = [];        // ТУР ЗУУР debug: ямар tool дуудсан
-    let followUpUsage = null;
 
     if (choice.finish_reason === "tool_calls") {
       const toolResults = [];
       for (const toolCall of choice.message.tool_calls) {
-        toolsUsed.push({ name: toolCall.function.name, args: toolCall.function.arguments });
         if (toolCall.function.name === "search_knowledge") {
           const { query } = JSON.parse(toolCall.function.arguments);
           const items = await prisma.turuuKnowledge.findMany({
@@ -1812,7 +1954,6 @@ router.post("/chat", blockIfExpired, async (req, res) => {
         max_tokens: 512,
       });
       reply = followUp.choices[0].message.content?.trim() || "";
-      followUpUsage = followUp.usage;
     } else {
       reply = choice.message.content?.trim() || "";
     }
@@ -1824,24 +1965,7 @@ router.post("/chat", blockIfExpired, async (req, res) => {
       if (!t.free) await incrementMessageUsedBy(orgId, 1);
     } catch { /* non-blocking */ }
 
-    // ТУР ЗУУР — токен зарцуулалт ба ₮ өртөг (Тест чат дээр харуулах). gpt-4o-mini $/1M, USD/MNT ₮3,600
-    const RATE = { in: 0.15, cached: 0.075, out: 0.60 };
-    const u1 = response.usage || {};
-    const c1 = u1.prompt_tokens_details?.cached_tokens || 0;
-    const c2 = followUpUsage?.prompt_tokens_details?.cached_tokens || 0;
-    const inTok = ((u1.prompt_tokens || 0) - c1) + ((followUpUsage?.prompt_tokens || 0) - c2);
-    const cachedTok = c1 + c2;
-    const outTok = (u1.completion_tokens || 0) + (followUpUsage?.completion_tokens || 0);
-    const costMnt = (inTok * RATE.in + cachedTok * RATE.cached + outTok * RATE.out) / 1e6 * 3600;
-    const _debug = {
-      model: aiSettings.model,
-      tokens: { input: inTok, cached: cachedTok, output: outTok, total: inTok + cachedTok + outTok },
-      costMnt: Math.round(costMnt * 1000) / 1000,
-      tools: toolsUsed,
-      calls: followUpUsage ? 2 : 1,
-    };
-
-    res.json({ reply, ...(replyImageUrl ? { imageUrl: replyImageUrl } : {}), _debug });
+    res.json({ reply, ...(replyImageUrl ? { imageUrl: replyImageUrl } : {}) });
   } catch (e) {
     res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") });
   }

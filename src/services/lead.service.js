@@ -69,6 +69,12 @@ async function saveOrder({ psid, orgId = null, customerName, customerPhone, cust
   }
   if (!Number.isFinite(Number(totalAmount)) || Number(totalAmount) < 0) totalAmount = 0;
 
+  // Хамгаалалт: бараатай атал нийт дүн 0/сөрөг бол → AI үнэ татахаас өмнө save_order дуудсан.
+  // ₮0 (үнэгүй) захиалга үүсгэхгүй — алдаа буцаавал AI үнийг эхлээд тодруулж дахин дуудна.
+  if (Array.isArray(items) && items.length > 0 && Number(totalAmount) <= 0) {
+    throw new Error("Захиалгын нийт дүн 0 байна. Барааны үнийг эхлээд тодруулна уу (search_knowledge/check_menu-ээр) дараа нь захиалгыг бүртгэнэ.");
+  }
+
   // Очиж авахдаа төлнө — notes-д тэмдэглэж эзэнд (dashboard + Telegram) харагдуулна
   if (payOnPickup) {
     const suffix = "Очиж авахдаа төлнө";

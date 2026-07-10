@@ -24,7 +24,20 @@ function getOpenAI() {
 }
 
 const { PLAN_QUOTA, PLAN_NEXT } = require("../lib/quotas");
-const { isOrgExpired } = require("../lib/quota");
+const { isOrgExpired, getTopupRemaining } = require("../lib/quota");
+
+// ── Загварын байрлал (task бүрт тохирсон загвар) ──────────────────────────
+// Гол чат ба энгийн follow-up — хямд/хурдан gpt-4o-mini (aiSettings.model-оор удирдана).
+// БАГА давтамжтай, гэхдээ алдаа-өртөг өндөр дуудлагыг л зорилготойгоор өргөнө:
+//   • OCR_MODEL (gpt-4o): төлбөрийн баримтын дүн унших — 1 зураг, тоо буруу уншвал
+//     буруу төлбөр батална (мөнгө). 1 зураг тул зардал хязгаартай (~₮11/дуудалт).
+//   • COMPARE_MODEL (gpt-4.1-mini): хэрэглэгчийн зургийг сангийн хувилбаруудтай визуалаар
+//     харьцуулах — олон зураг илгээдэг тул бүтэн gpt-4o (~₮79/дуудалт) хэт үнэтэй.
+//     4.1-mini нь 4o-mini-ээс vision сайн, gpt-4o-гийн ~1/6 зардалтай (тэнцвэр).
+// classifyImage-г mini дээр ҮЛДЭЭв: nano руу буулгах хэмнэлт өчүүхэн (~₮0.04/зураг),
+// харин nano-гийн vision сул (тестээр батлагдсан) тул routing алдаа гаргах эрсдэлтэй.
+const OCR_MODEL     = process.env.OCR_MODEL     || "gpt-4o";
+const COMPARE_MODEL = process.env.COMPARE_MODEL || "gpt-4.1-mini";
 
 // Текстийг normalize хийх (тэмдэгт арилгах, жижиглэх)
 function normalizeText(s) {
@@ -75,21 +88,29 @@ async function findExactMatch(orgId, userText) {
   return null;
 }
 
-// Message тоолох — cache hit болон normal дуудлага хоёуланд ашиглана
-async function incrementMessageUsed(orgId, prisma) {
-  try {
-    const now = new Date();
-    const nextReset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    // ATOMIC: хугацаа дууссан бол зөвхөн НЭГ зэрэгцээ хүсэлт reset хийнэ (count=1);
-    // бусад нь нөхцөл таарахгүй (count=0) → энгийн increment. Race-д тоо алдагдахгүй.
-    const reset = await prisma.organization.updateMany({
-      where: { id: orgId, OR: [{ quotaResetAt: null }, { quotaResetAt: { lte: now } }] },
-      data: { messageUsed: 1, quotaResetAt: nextReset },
-    });
-    if (reset.count === 0) {
-      await prisma.organization.update({ where: { id: orgId }, data: { messageUsed: { increment: 1 } } });
-    }
-  } catch { /* non-blocking */ }
+// Message тоолох — cache hit болон normal дуудлага хоёуланд ашиглана.
+// quota.incrementMessageUsedBy-д delegate хийнэ (нэг эх сурвалж): atomic reset + сарын reset дээр
+// base-ээс хэтэрч зарцуулсан topup credit-ийг persistent pool-оос хасах reconcile-ийг агуулна.
+async function incrementMessageUsed(orgId, _prisma) {
+  const { incrementMessageUsedBy } = require("../lib/quota");
+  await incrementMessageUsedBy(orgId, 1);
+}
+
+// Квотын мэдэгдлийг эзэн рүү Telegram-аар илгээнэ — сард НЭГ Л УДАА (level тус бүр).
+// Fire-and-forget: await хийхгүй тул хэрэглэгчид хариу өгөх latency-д нөлөөлөхгүй.
+function notifyQuotaOwner(orgId, level) {
+  if (!orgId) return;
+  (async () => {
+    try {
+      const { markQuotaNotice } = require("../lib/quota");
+      if (!(await markQuotaNotice(orgId, level))) return; // энэ сард аль хэдийн илгээсэн → давтахгүй
+      const telegram = require("./telegram.service");
+      const text = level === "exhausted"
+        ? "🔴 Мессежийн эрх дууслаа — AI бот түр зогслоо.\nНэмэлт message авах эсвэл план ахиулж сэргээнэ үү.\n→ Тохиргоо · Төлбөр & Тариф"
+        : "⚠️ Мессежийн эрх 90% хүрлээ.\nДуусвал AI бот зогсоно. Нэмэлт message авах эсвэл план ахиулахыг зөвлөж байна.\n→ Тохиргоо · Төлбөр & Тариф";
+      await telegram.notifyText(orgId, text);
+    } catch { /* мэдэгдэл амжилтгүй бол чимээгүй өнгөрнө */ }
+  })();
 }
 
 // Анти-спам / cost-abuse throttle — нэг харилцан яриа (orgId+psid) богино хугацаанд хэт олон
@@ -122,13 +143,14 @@ async function searchKnowledge(orgId, query) {
 
     if (items.length === 0) return { text: "Мэдлэгийн сан хоосон байна.", variantImages: [] };
 
-    const qWords = normalizeText(query).split(" ").filter((w) => w.length > 1);
+    // Монгол хайлт — substring биш, ҮНДСЭЭР тулгана (нугалаа/синоним/typo тэсвэрлэнэ)
+    const { normalizeMongol, overlapScore } = require("../lib/mongolStem");
+    const qWords = normalizeMongol(query);
 
     const scored = items
       .map((item) => {
-        const text = normalizeText(`${item.question} ${item.answer}`);
-        const score = qWords.filter((w) => text.includes(w)).length;
-        return { item, score };
+        const kbWords = normalizeMongol(`${item.question} ${item.answer} ${item.category || ""}`);
+        return { item, score: overlapScore(qWords, kbWords) };
       })
       .filter((s) => s.score > 0)
       .sort((a, b) => b.score - a.score)
@@ -283,13 +305,14 @@ const TOOLS = [
     type: "function",
     function: {
       name: "check_availability",
-      description: "Тухайн мастерын тодорхой өдрийн боломжит цагуудыг авна. staffId болон date YYYY-MM-DD форматаар заавал дамжуулна.",
+      description: "Тухайн мастерын тодорхой өдрийн боломжит цагуудыг авна. staffId болон date YYYY-MM-DD форматаар заавал дамжуулна. Хэрэглэгч тодорхой цаг хүссэн бол timeSlot-д HH:MM (24цаг) хэлбэрээр дамжуул — result-ийн requestedAvailable нь тэр цаг чөлөөтэй эсэхийг ХЭЛНЭ.",
       parameters: {
         type: "object",
         properties: {
           staffId:     { type: "string", description: "Мастерын ID (check_staff-с авна)" },
           date:        { type: "string", description: "Огноо YYYY-MM-DD форматаар" },
           serviceName: { type: "string", description: "Үйлчилгээний нэр (байвал тэрнийх duration ашиглана)" },
+          timeSlot:    { type: "string", description: "Хэрэглэгчийн хүссэн цаг HH:MM (24цаг). Жишээ: '2 цагт'→'14:00'. Байвал requestedAvailable буцаана." },
         },
         required: ["staffId", "date"],
       },
@@ -366,8 +389,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "check_menu",
-      description: "Бүх бараа/бүтээгдэхүүний жагсаалтыг ангилалаар нь авна. Хэрэглэгч 'ямар бараа байна?', 'юу зардаг вэ?', 'бараагаа харуулаач', 'меню юу байна?' гэх мэт ЕРӨНХИЙ асуулт асуувал дуудна.",
-      parameters: { type: "object", properties: {}, required: [] },
+      description: "Бараа/бүтээгдэхүүний жагсаалтыг авна. Хэрэглэгч ТОДОРХОЙ ТӨРӨЛ/АНГИЛАЛ асуувал (жишээ: 'гутал юу байна', 'пүүз байгаа юу', 'цамц харах', 'малгай юу байна') тэр төрлийн нэрийг `category`-д ЗААВАЛ дамжуул (ярианы үг бол каноноор: 'пүүз'→'гутал') — зөвхөн тэр ангилал буцна, token ихээхэн хэмнэнэ. Зөвхөн ЕРӨНХИЙ ('юу зардаг вэ', 'бүх бараагаа харуул') үед л category-г ХООСОН орхи.",
+      parameters: { type: "object", properties: { category: { type: "string", description: "Тодорхой ангилал (жишээ: 'гутал', 'цамц'). Ерөнхий асуулт бол хоосон." } }, required: [] },
     },
   },
   {
@@ -567,22 +590,26 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   const businessType = await cachedBusinessType(orgId);
   const activeTools = toolsForType(businessType);
 
-  // Upsell hint — квот 80%+ бол нэмэх
+  // Квотын хатуу хориг + upsell hint
   if (orgId) {
     try {
       const org = await prisma.organization.findUnique({
         where: { id: orgId },
         select: { plan: true, messageUsed: true },
       });
-      const quota = PLAN_QUOTA[org.plan] || 10000;
+      const base = PLAN_QUOTA[org.plan] || 10000;
+      const topup = await getTopupRemaining(orgId);      // үлдсэн нэмэлт message credit (persistent)
+      const effectiveQuota = base + topup;               // base + худалдаж авсан нэмэлт
       const used = org.messageUsed || 0;
-      // Runaway-cost circuit breaker — quota-аас 3 дахин их бол OpenAI дуудахаа зогсооно.
-      // Жирийн бизнест хүрэхгүй өндөр; зөвхөн ноцтой abuse/алдаанаас платформын зардлыг хамгаална.
-      if (used >= quota * 3) {
-        console.warn(`[ai] org ${orgId} hard cost-cap hit (used=${used}, quota=${quota}) — AI хариу зогсоов`);
+      // ХАТУУ ХОРИГ — quota (base + topup) 100% дүүрвэл AI хариу зогсооно.
+      // Хэрэглэгч нэмэлт message багц (top-up) авах эсвэл дээд план руу upgrade хийж нээнэ.
+      if (used >= effectiveQuota) {
+        console.warn(`[ai] org ${orgId} quota exhausted (used=${used}, quota=${effectiveQuota}) — AI хариу зогсоов`);
+        notifyQuotaOwner(orgId, "exhausted");            // эзэнд Telegram-аар мэдэгдэнэ (сард нэг удаа)
         return null;
       }
-      const pct = Math.round((used / quota) * 100);
+      const pct = Math.round((used / effectiveQuota) * 100);
+      if (pct >= 90) notifyQuotaOwner(orgId, "warn90");  // 90% → эзэнд урьдчилан мэдэгдэнэ (сард нэг удаа)
       const nextPlan = PLAN_NEXT[org.plan];
       if (pct >= 80 && nextPlan) {
         systemPrompt += `\n\n[ДОТООД: Энэ org-ийн мессежийн эрх ${pct}% дүүрсэн. Байгалийн яриа дотор боломжтой үед ${nextPlan} план руу upgrade хийхийг зөөлнөөр санал болго.]`;
@@ -739,7 +766,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
 
       } else if (toolCall.function.name === "check_availability") {
         try {
-          const { date, staffId, serviceName } = args;
+          const { date, staffId, serviceName, timeSlot } = args;
           const today = new Date(); today.setHours(0, 0, 0, 0);
           const reqDate = new Date(`${date}T00:00:00`);
           if (reqDate < today) {
@@ -774,7 +801,16 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
               const buffer = Number(staff.bufferMinutes) || 0;
               const allSlots = buildSlots(staff.workStart, staff.workEnd, duration + buffer);
               const available = allSlots.filter((s) => !bookedTimes.has(s));
-              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ availableSlots: available, staffName: staff.name }) });
+              // Хэрэглэгч тодорхой цаг хүссэн бол тэр цаг чөлөөтэй эсэхийг ИЛ ХЭЛНЭ —
+              // AI-г availableSlots-ыг гараар харьцуулах шаардлагаас чөлөөлж, "боломжгүй" гэсэн
+              // hallucination-аас сэргийлнэ. requestedAvailable=true бол шууд баталгаажуулна.
+              const out = { availableSlots: available, staffName: staff.name };
+              if (timeSlot) {
+                const norm = String(timeSlot).trim().replace(/^(\d):/, "0$1:"); // "9:00"→"09:00"
+                out.requestedSlot = norm;
+                out.requestedAvailable = available.includes(norm);
+              }
+              toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify(out) });
             }
           }
           }
@@ -823,6 +859,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
 
       } else if (toolCall.function.name === "check_menu") {
         try {
+          const { category } = args;
           const kbItems = await prisma.turuuKnowledge.findMany({
             where: { orgId, active: true, category: { startsWith: "Бүтээгдэхүүн" } },
             select: { question: true, answer: true, category: true, variants: true },
@@ -840,10 +877,28 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
               const priceNum = price ? parseInt(price.replace(/,/g, ""), 10) : Infinity;
               byCat[cat].push({ text: `${item.question}${price ? ` — ${price}₮` : ""}`, price: priceNum });
             }
-            const categories = Object.keys(byCat);
+            const allCategories = Object.keys(byCat);
+
+            // Ангилал шүүлт — хэрэглэгч тодорхой ангилал асуувал зөвхөн тэрийг буцаана (token хэмнэнэ).
+            // Монгол үндсээр тулгана: "гутал"→"Гутал", синоним "пүүз"→"гутал" гэх мэт.
+            let categories = allCategories;
+            if (category && category.trim()) {
+              const { normalizeMongol, wordMatch } = require("../lib/mongolStem");
+              const want = normalizeMongol(category);
+              const matched = allCategories.filter((c) => {
+                const cw = normalizeMongol(c);
+                return want.some((q) => cw.some((k) => wordMatch(q, k)));
+              });
+              if (matched.length > 0) categories = matched; // тааралгүй бол бүгдийг үлдээнэ (fallback)
+            }
+
             // Ангилал доторх барааг үнээр өсөхөөр эрэмбэлнэ — "хамгийн хямд/үнэтэй" асуултад найдвартай
             const menu = categories.map((cat) => `【${cat}】\n${byCat[cat].sort((a, b) => a.price - b.price).map((x) => x.text).join("\n")}`).join("\n\n");
-            toolResults.push({ tool_call_id: toolCall.id, content: `Ангилалууд: ${categories.join(", ")}\n\n${menu}` });
+            // Шүүсэн бол зөвхөн тэр ангилал; бусад ангиллын нэрсийг сануулна (хэрэглэгч өөрийг нь асуувал)
+            const header = categories.length < allCategories.length
+              ? `${categories.join(", ")} ангилал (бусад: ${allCategories.filter((c) => !categories.includes(c)).join(", ")}):`
+              : `Ангилалууд: ${allCategories.join(", ")}`;
+            toolResults.push({ tool_call_id: toolCall.id, content: `${header}\n\n${menu}` });
           }
         } catch {
           toolResults.push({ tool_call_id: toolCall.id, content: "Меню авахад алдаа гарлаа." });
@@ -988,8 +1043,10 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
       followUpMessages.push({ role: "user", content: comparisonContent });
     }
 
+    // Зураг харьцуулах round бол COMPARE_MODEL (визуал нарийвчлал), бусад энгийн follow-up mini хэвээр.
+    const isVisualCompare = imageUrl && variantImages.length > 0;
     const followUp = await getOpenAI().chat.completions.create({
-      model: aiSettings.model,
+      model: isVisualCompare ? COMPARE_MODEL : aiSettings.model,
       messages: followUpMessages,
       tools: activeTools,
       tool_choice: "auto",
@@ -1011,7 +1068,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         }
       }
       const round3 = await getOpenAI().chat.completions.create({
-        model: aiSettings.model,
+        model: isVisualCompare ? COMPARE_MODEL : aiSettings.model,
         messages: [...followUpMessages, followUp.choices[0].message, ...toolResults2.map((r) => ({ role: "tool", tool_call_id: r.tool_call_id, content: r.content }))],
         temperature: aiSettings.temperature,
         max_tokens: 512,
@@ -1052,7 +1109,7 @@ async function processReceiptImage(psid, imageUrl, orgId = null) {
   let extractedAmount = 0;
   try {
     const response = await getOpenAI().chat.completions.create({
-      model: "gpt-4o-mini",
+      model: OCR_MODEL,
       messages: [
         {
           role: "user",
