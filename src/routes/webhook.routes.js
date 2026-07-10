@@ -7,7 +7,7 @@ const { getPrisma } = require("../lib/db");
 const { checkPayment } = require("../services/qpay.service");
 const { rateLimit } = require("../middleware/rateLimit");
 const telegram = require("../services/telegram.service");
-const { applySubscriptionPayment } = require("../services/payment.service");
+const { applySubscriptionPayment, applyTopupPayment } = require("../services/payment.service");
 const { decrypt } = require("../lib/secretCrypto");
 
 const router = express.Router();
@@ -359,6 +359,40 @@ router.post("/sub-qpay/:orgId", whLimit, async (req, res) => {
       console.log(`[SubQPay] Org ${org.id} subscription renewed`);
     } catch (err) {
       console.error("[SubQPay callback]", err.message);
+    }
+  });
+});
+
+// Message top-up QPay callback — POST /webhook/topup-qpay/:orgId
+// pending_topup (TuruuSettings) нь { invoiceId, units, amount } хадгална. Tab хаагдсан ч
+// webhook нэмэлт message credit-ийг ИДЕМПОТЕНТоор бүртгэнэ (polling /topup/check-тэй зөрчилгүй —
+// applyTopupPayment delete-as-mutex-ээр давхар нэмэхээс сэргийлнэ).
+router.post("/topup-qpay/:orgId", whLimit, async (req, res) => {
+  res.json({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      const prisma = getPrisma();
+      const orgId = req.params.orgId;
+      const s = await prisma.turuuSettings.findUnique({ where: { orgId_key: { orgId, key: "pending_topup" } } });
+      if (!s || !s.value) return;
+      let pending;
+      try { pending = JSON.parse(s.value); } catch { return; }
+      if (!pending.invoiceId) return;
+
+      const subQpay = require("../services/subscription-qpay.service");
+      const result = await subQpay.checkPayment(pending.invoiceId);
+      const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID" || result.invoice_status === "PAID";
+      if (!paid) return;
+      if (!paidEnough(result, pending.amount)) {
+        console.warn(`[TopupQPay] Org ${orgId} underpaid — paid_amount=${result.paid_amount}, expected=${pending.amount}`);
+        return;
+      }
+
+      const { applied, added } = await applyTopupPayment(prisma, orgId);
+      if (applied) console.log(`[TopupQPay] Org ${orgId} +${added} message credit`);
+    } catch (err) {
+      console.error("[TopupQPay callback]", err.message);
     }
   });
 });
