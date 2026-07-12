@@ -461,6 +461,15 @@ function toolsForType(businessType) {
   const names = TOOLS_BY_TYPE[businessType];
   return names ? TOOLS.filter((t) => names.includes(t.function.name)) : TOOLS;
 }
+
+// Growth+ багцаас нээгддэг tool-ууд (Захиалга/QPay, Цаг захиалга, Хүн handoff).
+// Starter багцад эдгээрийг activeTools-оос хасна — AI дуудаж чадахгүй болно.
+const GROWTH_ONLY_TOOLS = new Set([
+  "save_order", "check_order", "confirm_payment",
+  "save_appointment", "reschedule_appointment", "check_availability", "check_staff",
+  "save_reservation", "cancel_reservation", "check_tables",
+  "request_handoff",
+]);
 // business_type-ийг 60с кэшилнэ (prompt cache-тэй ижил хугацаа)
 function cachedBusinessType(orgId) {
   if (!orgId) return Promise.resolve(null);
@@ -588,7 +597,15 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   let systemPrompt = await cachedSystemPrompt(isNew, orgId, !!imageUrl);
   // Бизнес төрлөөр tool жагсаалтыг шүүнэ — хэрэггүй tool илгээхгүй (токен хэмнэнэ)
   const businessType = await cachedBusinessType(orgId);
-  const activeTools = toolsForType(businessType);
+  let activeTools = toolsForType(businessType);
+  // Багцын feature gating — Starter багцад захиалга/цаг/handoff tool-уудыг хасна (Growth+ л нээгдэнэ)
+  if (orgId) {
+    const { getOrgPlan, planAllows } = require("../lib/planFeatures");
+    const plan = await getOrgPlan(orgId);
+    if (!planAllows(plan, "orders")) {
+      activeTools = activeTools.filter((t) => !GROWTH_ONLY_TOOLS.has(t.function.name));
+    }
+  }
 
   // Квотын хатуу хориг + upsell hint
   if (orgId) {

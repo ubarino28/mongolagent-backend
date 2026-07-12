@@ -5,5 +5,7 @@
 // Квот = үнэ×40% ÷ ₮10.3. Үнэ: 59,900 / 99,900 / 179,900 / 349,900.
 const PLAN_QUOTA = { starter: 2300, growth: 3800, business: 6900, enterprise: 13500 };
 const PLAN_NEXT  = { starter: "Growth", growth: "Business", business: "Enterprise" };
+// Багцын шатлал — feature gating-д "энэ план ба түүнээс дээш" гэж харьцуулна
+const PLAN_RANK  = { starter: 0, growth: 1, business: 2, enterprise: 3 };
 
-module.exports = { PLAN_QUOTA, PLAN_NEXT };
+module.exports = { PLAN_QUOTA, PLAN_NEXT, PLAN_RANK };
