@@ -8,6 +8,7 @@ const multer = require("multer");
 const { createClient } = require("@supabase/supabase-js");
 const { getPrisma } = require("../lib/db");
 const { clientAuthMiddleware, blockIfExpired } = require("../middleware/clientAuth");
+const { requireFeature, getOrgPlan, kbLimit, planAllows, PLAN_LABEL } = require("../lib/planFeatures");
 const { sendText } = require("../services/facebook.service");
 const { applySubscriptionPayment, applyTopupPayment } = require("../services/payment.service");
 const { encrypt, decrypt } = require("../lib/secretCrypto");
@@ -359,6 +360,15 @@ router.post("/knowledge", async (req, res) => {
     const { question, answer, category, imageUrl, variants } = req.body;
     if (!question || !answer) return res.status(400).json({ error: "question, answer шаардлагатай" });
     const prisma = getPrisma();
+    // Мэдлэгийн сангийн багтаамжийн лимит (план бүр: 100 / 500 / 2,000 / ∞)
+    const plan = await getOrgPlan(req.org.orgId);
+    const limit = kbLimit(plan);
+    if (Number.isFinite(limit)) {
+      const count = await prisma.turuuKnowledge.count({ where: { orgId: req.org.orgId } });
+      if (count >= limit) {
+        return res.status(403).json({ error: `${PLAN_LABEL[plan] || "Таны"} багцын мэдлэгийн сангийн багтаамж (бараа + мэдээлэл нийт ${limit}) дүүрсэн байна. Илүү нэмэхийн тулд багцаа дээшлүүлээрэй.`, code: "KB_LIMIT", limit });
+      }
+    }
     const item = await prisma.turuuKnowledge.create({
       data: { orgId: req.org.orgId, question, answer, category, imageUrl: imageUrl || null, variants: variants ?? null },
     });
@@ -1349,7 +1359,18 @@ router.put("/settings", async (req, res) => {
   try {
     const prisma = getPrisma();
     const orgId = req.org.orgId;
-    const ops = Object.entries(req.body).map(([key, value]) =>
+    // AI тохиргоо (загвар / өнгө аяс / max_tokens) — зөвхөн Business+. Доод планд эдгээр key-г
+    // ЧИМЭЭГҮЙ ХАСНА (bot_name / system_prompt зэрэг бусад тохиргоо хадгалагдана, 403 өгөхгүй).
+    const AI_CONFIG_KEYS = ["ai_model", "ai_temperature", "ai_max_tokens"];
+    let body = req.body || {};
+    if (AI_CONFIG_KEYS.some((k) => k in body)) {
+      const plan = await getOrgPlan(orgId);
+      if (!planAllows(plan, "aiConfig")) {
+        body = { ...body };
+        for (const k of AI_CONFIG_KEYS) delete body[k];
+      }
+    }
+    const ops = Object.entries(body).map(([key, value]) =>
       prisma.turuuSettings.upsert({
         where: { orgId_key: { orgId, key } },
         create: { orgId, key, value: String(value) },
@@ -1393,6 +1414,22 @@ router.get("/quota", async (req, res) => {
 // GET /client/analytics
 router.get("/analytics", async (req, res) => {
   try {
+    // ТҮР ЗУУР demo (зөвхөн local, DEMO_ANALYTICS=1) — dashboard-ыг хиймэл өгөгдлөөр дүүргэж үзүүлнэ
+    const demo = require("../lib/demoAnalytics");
+    if (demo.DEMO_ON()) {
+      // preset (period=today/7d/30d/all) болон календарь (from/to) хоёуланг дэмжинэ
+      let demoFrom = req.query.from, demoTo = req.query.to;
+      if (!demoFrom && !demoTo) {
+        const p = req.query.period || "30d";
+        const now = new Date();
+        demoTo = now.toISOString().slice(0, 10);
+        if (p === "today") demoFrom = demoTo;
+        else if (p === "7d") demoFrom = new Date(now.getTime() - 6 * 86400000).toISOString().slice(0, 10);
+        else if (p === "all") demoFrom = new Date(now.getTime() - 179 * 86400000).toISOString().slice(0, 10);
+        else demoFrom = new Date(now.getTime() - 29 * 86400000).toISOString().slice(0, 10); // 30d
+      }
+      return res.json(demo.demoAnalytics(demoFrom, demoTo));
+    }
     const prisma = getPrisma();
     const orgId = req.org.orgId;
 
@@ -1415,23 +1452,35 @@ router.get("/analytics", async (req, res) => {
         GROUP BY DATE("createdAt") ORDER BY date ASC`,
     ]);
 
-    // Орлогын тооцоолол — хугацаагаар (today / 7d / 30d / all)
+    // Орлогын тооцоолол — period (today/7d/30d/all) ЭСВЭЛ from/to (календарь огноогоор шүүх)
     const period = req.query.period || "all";
-    const periodFilter = period === "today" ? { gte: new Date(new Date().setHours(0,0,0,0)) }
-      : period === "7d" ? { gte: new Date(Date.now() - 7 * 86400000) }
-      : period === "30d" ? { gte: new Date(Date.now() - 30 * 86400000) }
-      : undefined;
+    const fromQ = req.query.from ? new Date(req.query.from) : null;
+    const toQ = req.query.to ? new Date(req.query.to) : null;
+    if (toQ) toQ.setHours(23, 59, 59, 999);
+    let periodFilter;
+    if (fromQ || toQ) {
+      periodFilter = { ...(fromQ ? { gte: fromQ } : {}), ...(toQ ? { lte: toQ } : {}) };
+    } else {
+      periodFilter = period === "today" ? { gte: new Date(new Date().setHours(0, 0, 0, 0)) }
+        : period === "7d" ? { gte: new Date(Date.now() - 7 * 86400000) }
+        : period === "30d" ? { gte: new Date(Date.now() - 30 * 86400000) }
+        : undefined;
+    }
     const dateWhere = periodFilter ? { createdAt: periodFilter } : {};
+    const dailyGte = (periodFilter && periodFilter.gte) || new Date(Date.now() - 30 * 86400000);
+    const dailyLte = (periodFilter && periodFilter.lte) || new Date();
 
     const [orderRevenue, appointmentRevenue, storeRevenue, dailyRevenue] = await Promise.all([
       prisma.turuuOrder.aggregate({ where: { orgId, status: "PAID", ...dateWhere }, _sum: { totalAmount: true }, _count: true }),
       prisma.turuuAppointment.aggregate({ where: { orgId, depositStatus: "PAID", ...dateWhere }, _sum: { depositAmount: true }, _count: true }),
-      prisma.$queryRaw`SELECT COALESCE(SUM("totalAmount"), 0)::float as total, COUNT(*)::int as cnt FROM "StoreOrder" WHERE "orgId" = ${orgId} AND "status" = 'PAID' ${periodFilter ? prisma.$queryRaw` AND "createdAt" >= ${periodFilter.gte}` : prisma.$queryRaw``}`.catch(() => [{ total: 0, cnt: 0 }]),
+      prisma.$queryRaw`SELECT COALESCE(SUM("totalAmount"), 0)::float as total, COUNT(*)::int as cnt FROM "StoreOrder" WHERE "orgId" = ${orgId} AND "status" = 'PAID'
+        ${periodFilter && periodFilter.gte ? prisma.$queryRaw`AND "createdAt" >= ${periodFilter.gte}` : prisma.$queryRaw``}
+        ${periodFilter && periodFilter.lte ? prisma.$queryRaw`AND "createdAt" <= ${periodFilter.lte}` : prisma.$queryRaw``}`.catch(() => [{ total: 0, cnt: 0 }]),
       prisma.$queryRaw`
         SELECT d.date, COALESCE(SUM(d.amount), 0)::float as amount FROM (
-          SELECT DATE("createdAt") as date, "totalAmount" as amount FROM "TuruuOrder" WHERE "orgId" = ${orgId} AND "status" = 'PAID' AND "createdAt" >= NOW() - INTERVAL '30 days'
+          SELECT DATE("createdAt") as date, "totalAmount" as amount FROM "TuruuOrder" WHERE "orgId" = ${orgId} AND "status" = 'PAID' AND "createdAt" >= ${dailyGte} AND "createdAt" <= ${dailyLte}
           UNION ALL
-          SELECT DATE("createdAt") as date, "depositAmount" as amount FROM "TuruuAppointment" WHERE "orgId" = ${orgId} AND "depositStatus" = 'PAID' AND "createdAt" >= NOW() - INTERVAL '30 days'
+          SELECT DATE("createdAt") as date, "depositAmount" as amount FROM "TuruuAppointment" WHERE "orgId" = ${orgId} AND "depositStatus" = 'PAID' AND "createdAt" >= ${dailyGte} AND "createdAt" <= ${dailyLte}
         ) d GROUP BY d.date ORDER BY d.date ASC`,
     ]);
 
@@ -1501,13 +1550,113 @@ router.get("/analytics", async (req, res) => {
         prodMap[name].revenue += qty * price;
       }
     }
-    const topProducts = Object.values(prodMap).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+    const topProducts = Object.values(prodMap).sort((a, b) => b.revenue - a.revenue).slice(0, 10);
 
+    // Analytics (deltas / топ бараа / орлого) — бүх планд НЭЭЛТТЭЙ (Starter=Growth ижил түвшин).
+    // Ирээдүйн "Дэвшилтэт analytics" (Business) нэмэлт зүйлсийг дараа тусад нь gate хийнэ.
     res.json({
       totalConversations, totalLeads, totalConsultations, totalOrders, newLeads,
       dailyMessages, dailyLeads, dailyConsultations, dailyOrders,
       deltas, topProducts, revenue,
     });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// GET /client/report?months=N — сар бүрийн орлого/үзүүлэлт (банкны зээлийн тайлан / хар дэвтэр)
+router.get("/report", async (req, res) => {
+  try {
+    const N = Math.min(Math.max(parseInt(req.query.months, 10) || 6, 1), 36);
+    const demo = require("../lib/demoAnalytics");
+    if (demo.DEMO_ON()) return res.json(demo.demoReport(N));
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const since = new Date(); since.setMonth(since.getMonth() - (N - 1)); since.setDate(1); since.setHours(0, 0, 0, 0);
+    const mnLabel = (key) => { const [y, m] = key.split("-"); return `${y} ${parseInt(m, 10)}-р сар`; };
+
+    const [rev, store, leads, convs, src] = await Promise.all([
+      prisma.$queryRaw`
+        SELECT to_char(date_trunc('month', d.created), 'YYYY-MM') as month, COALESCE(SUM(d.amount),0)::float as revenue, COUNT(*)::int as orders
+        FROM (
+          SELECT "createdAt" as created, "totalAmount" as amount FROM "TuruuOrder" WHERE "orgId"=${orgId} AND "status"='PAID' AND "createdAt" >= ${since}
+          UNION ALL
+          SELECT "createdAt" as created, "depositAmount" as amount FROM "TuruuAppointment" WHERE "orgId"=${orgId} AND "depositStatus"='PAID' AND "createdAt" >= ${since}
+        ) d GROUP BY 1`,
+      prisma.$queryRaw`SELECT to_char(date_trunc('month', "createdAt"), 'YYYY-MM') as month, COALESCE(SUM("totalAmount"),0)::float as revenue, COUNT(*)::int as orders FROM "StoreOrder" WHERE "orgId"=${orgId} AND "status"='PAID' AND "createdAt" >= ${since} GROUP BY 1`.catch(() => []),
+      prisma.$queryRaw`SELECT to_char(date_trunc('month', "createdAt"), 'YYYY-MM') as month, COUNT(*)::int as c FROM "TuruuLead" WHERE "orgId"=${orgId} AND "createdAt" >= ${since} GROUP BY 1`,
+      prisma.$queryRaw`SELECT to_char(date_trunc('month', "createdAt"), 'YYYY-MM') as month, COUNT(*)::int as c FROM "TuruuChat" WHERE "orgId"=${orgId} AND "createdAt" >= ${since} GROUP BY 1`,
+      Promise.all([
+        prisma.turuuOrder.aggregate({ where: { orgId, status: "PAID", createdAt: { gte: since } }, _sum: { totalAmount: true }, _count: true }),
+        prisma.turuuAppointment.aggregate({ where: { orgId, depositStatus: "PAID", createdAt: { gte: since } }, _sum: { depositAmount: true }, _count: true }),
+        prisma.$queryRaw`SELECT COALESCE(SUM("totalAmount"),0)::float as total, COUNT(*)::int as cnt FROM "StoreOrder" WHERE "orgId"=${orgId} AND "status"='PAID' AND "createdAt" >= ${since}`.catch(() => [{ total: 0, cnt: 0 }]),
+      ]),
+    ]);
+
+    // Сүүлийн N сарын товч бэлдэж, нүхийг 0-оор дүүргэнэ
+    const keys = [];
+    for (let i = N - 1; i >= 0; i--) { const d = new Date(); d.setMonth(d.getMonth() - i); keys.push(d.toISOString().slice(0, 7)); }
+    const b = {}; keys.forEach((k) => { b[k] = { month: k, label: mnLabel(k), revenue: 0, orders: 0, leads: 0, conversations: 0 }; });
+    rev.forEach((r) => { if (b[r.month]) { b[r.month].revenue += r.revenue; b[r.month].orders += r.orders; } });
+    store.forEach((r) => { if (b[r.month]) { b[r.month].revenue += r.revenue; b[r.month].orders += r.orders; } });
+    leads.forEach((r) => { if (b[r.month]) b[r.month].leads = r.c; });
+    convs.forEach((r) => { if (b[r.month]) b[r.month].conversations = r.c; });
+    const monthly = keys.map((k) => b[k]);
+    const totals = monthly.reduce((t, m) => ({ revenue: t.revenue + m.revenue, orders: t.orders + m.orders, leads: t.leads + m.leads, conversations: t.conversations + m.conversations }), { revenue: 0, orders: 0, leads: 0, conversations: 0 });
+    const [o, a, s] = src;
+    const revenueBySource = {
+      orders: o._sum.totalAmount || 0, ordersCount: o._count || 0,
+      appointments: a._sum.depositAmount || 0, appointmentsCount: a._count || 0,
+      store: Array.isArray(s) ? (s[0]?.total || 0) : 0, storeCount: Array.isArray(s) ? (s[0]?.cnt || 0) : 0,
+    };
+    res.json({ months: N, monthly, totals, revenueBySource });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /client/report/pay — тайлан татах/хэвлэхийн өмнөх ₮5,000 QPay нэхэмжлэх
+const REPORT_PRICE = 5000;
+router.post("/report/pay", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    // QPay creds байхгүй (local) → mock (туршихад флоуг харуулна)
+    if (!process.env.PLATFORM_QPAY_MERCHANT_ID || !process.env.PLATFORM_ACCOUNT_NUMBER) {
+      await prisma.turuuSettings.upsert({
+        where: { orgId_key: { orgId, key: "pending_report" } },
+        create: { orgId, key: "pending_report", value: JSON.stringify({ mock: true }) },
+        update: { value: JSON.stringify({ mock: true }) },
+      });
+      return res.json({ ok: true, mock: true, amount: REPORT_PRICE, invoiceId: "MOCK", qrText: "MOCK-QPAY", urls: [] });
+    }
+    const subQpay = require("../services/subscription-qpay.service");
+    const apiUrl = process.env.API_URL || "https://api.mongolagent.mn";
+    const result = await subQpay.createInvoice({
+      orgId, plan: "report", amount: REPORT_PRICE,
+      description: "Mongol Agent — Санхүүгийн тайлан (PDF)",
+      callbackUrl: `${apiUrl}/webhook/report-qpay/${orgId}`,
+    });
+    await prisma.turuuSettings.upsert({
+      where: { orgId_key: { orgId, key: "pending_report" } },
+      create: { orgId, key: "pending_report", value: JSON.stringify({ invoiceId: result.invoice_id }) },
+      update: { value: JSON.stringify({ invoiceId: result.invoice_id }) },
+    });
+    res.json({ ok: true, amount: REPORT_PRICE, invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /client/report/pay/check — тайлангийн төлбөр төлөгдсөн эсэх
+router.post("/report/pay/check", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const s = await prisma.turuuSettings.findUnique({ where: { orgId_key: { orgId, key: "pending_report" } } });
+    if (!s || !s.value) return res.json({ paid: false });
+    let pending; try { pending = JSON.parse(s.value); } catch { return res.json({ paid: false }); }
+    const clear = () => prisma.turuuSettings.delete({ where: { orgId_key: { orgId, key: "pending_report" } } }).catch(() => {});
+    if (pending.mock) { await clear(); return res.json({ paid: true, mock: true }); }
+    const subQpay = require("../services/subscription-qpay.service");
+    const result = await subQpay.checkPayment(pending.invoiceId);
+    const paid = result.invoice_status === "PAID" || (result.count != null && result.count > 0) || result.payment_status === "PAID";
+    if (paid) { await clear(); return res.json({ paid: true }); }
+    res.json({ paid: false });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
@@ -1538,7 +1687,7 @@ router.get("/orders", async (req, res) => {
 });
 
 // POST /client/orders
-router.post("/orders", async (req, res) => {
+router.post("/orders", requireFeature("orders"), async (req, res) => {
   try {
     const { customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes, psid, status } = req.body;
     const prisma = getPrisma();
@@ -1638,7 +1787,7 @@ router.get("/billing", async (req, res) => {
     const quota = PLAN_QUOTA[org.plan] || 10000;
     const PLANS = {
       starter:    { name: "Starter",    price: 59900,  quota: 2300,  features: ["2,300 мессеж/сар", "Facebook Messenger AI", "Builder AI", "Мэдлэгийн сан (100)", "Lead цуглуулах", "Telegram мэдэгдэл"] },
-      growth:     { name: "Growth",     price: 99900,  quota: 3800,  features: ["3,800 мессеж/сар", "Захиалга + QPay төлбөр", "Цаг захиалга + урьдчилгаа", "Instagram DM", "Хүн handoff", "Автомат comment · PDF/Excel → KB", "Funnel analytics"] },
+      growth:     { name: "Growth",     price: 99900,  quota: 3800,  features: ["3,800 мессеж/сар", "Мэдлэгийн сан (500)", "Захиалга + QPay төлбөр", "Цаг захиалга + урьдчилгаа", "Instagram DM", "Хүн handoff", "Автомат comment", "PDF/Excel → Мэдлэгийн сан", "Funnel analytics"] },
       business:   { name: "Business",   price: 179900, quota: 6900,  features: ["6,900 мессеж/сар", "Custom keyword → DM", "AI тохиргоо (model/tone)", "Мэдлэгийн сан (2,000)", "Priority Telegram дэмжлэг", "Дэвшилтэт analytics"] },
       enterprise: { name: "Enterprise", price: 349900, quota: 13500, features: ["13,500 мессеж/сар", "Custom AI Chatbot", "Custom AI Agent", "Custom Website", "White label", "Олон хуудас + API"] },
     };
@@ -2183,7 +2332,7 @@ function handlePdfUploadError(err, req, res, next) {
 }
 
 // POST /client/upload/pdf — PDF-аас Q&A автоматаар гаргаж KB-д нэмнэ
-router.post("/upload/pdf", blockIfExpired, pdfUpload.single("file"), handlePdfUploadError, async (req, res) => {
+router.post("/upload/pdf", blockIfExpired, requireFeature("fileImport"), pdfUpload.single("file"), handlePdfUploadError, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "file шаардлагатай" });
     if (req.file.mimetype !== "application/pdf") return res.status(400).json({ error: "Зөвхөн PDF файл оруулна уу" });
@@ -2278,7 +2427,7 @@ router.get("/upload/excel/template", async (req, res) => {
 });
 
 // POST /client/upload/excel — Excel-ээс бараа бөөнөөр KB-д импортлоно (шинэ нэмэх / ижил нэртэйг шинэчлэх)
-router.post("/upload/excel", blockIfExpired, excelUpload.single("file"), handleExcelUploadError, async (req, res) => {
+router.post("/upload/excel", blockIfExpired, requireFeature("fileImport"), excelUpload.single("file"), handleExcelUploadError, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "file шаардлагатай" });
 
@@ -2446,6 +2595,8 @@ JSON object хэлбэрт буцаа: {"<барааны нэр>": "<дэд ан
 // GET /client/analytics/funnel
 router.get("/analytics/funnel", async (req, res) => {
   try {
+    const demo = require("../lib/demoAnalytics");
+    if (demo.DEMO_ON()) return res.json(demo.demoFunnel());
     const prisma = getPrisma();
     const orgId = req.org.orgId;
     const [conversations, leads, consultations, orders] = await Promise.all([
