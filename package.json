@@ -27,6 +27,7 @@
     "openai": "^4.52.7",
     "pdf-parse": "^2.4.5",
     "prisma": "^5.14.0",
+    "qrcode": "^1.5.4",
     "resend": "^6.12.3"
   },
   "devDependencies": {

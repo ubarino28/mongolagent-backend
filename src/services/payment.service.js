@@ -1,5 +1,8 @@
 "use strict";
 const { decrementStockForOrder } = require("./stock.service");
+const { PLAN_PERIOD_PRICE, PERIOD_MONTHS } = require("../lib/planPricing");
+const storeSync = require("./storeSync.service");
+const cache = require("../lib/cache");
 
 // Захиалгыг ИДЕМПОТЕНТоор PAID болгоно.
 // updateMany нь зөвхөн PENDING→PAID шилжилтийг хийсэн ганц хүсэлтэд count=1 буцаана,
@@ -11,9 +14,13 @@ async function markStoreOrderPaid(prisma, order) {
     data: { qpayStatus: "PAID", status: "PAID" },
   });
   if (r.count !== 1) return false; // өөр хүсэлт аль хэдийн PAID болгосон — давтахгүй
+  cache.invalidateOrg(order.orgId); // вэбсайт/QPay төлбөр → тайлан/dashboard шинэчлэгдэнэ
 
-  // Нөөц хасах — зөвхөн анхны шилжилтэд
+  // Нөөц хасах — зөвхөн анхны шилжилтэд. Product.stock-оос хасаад, дараа нь холбогдсон
+  // мэдлэгийн сан (KB)-гийн variant нөөцийг ч хасаж, AI-ийн мэдэх нөөцтэй уялдуулна
+  // (эс тэгвэл вэбсайтаас зарсан барааг AI Messenger дээр давхар зарж болзошгүй).
   await decrementStockForOrder(prisma, order).catch(() => {});
+  await storeSync.decrementKnowledgeForStoreOrder(order.orgId, order.items).catch(() => {});
 
   // Купоны ашиглалтыг ЗӨВХӨН ТӨЛСНИЙ ДАРАА тоолно (төлөөгүй захиалга купон иддэггүй)
   if (order.discountCode && order.storeId) {
@@ -75,6 +82,17 @@ async function applySubscriptionPayment(prisma, org) {
   });
   if (r.count === 1) {
     try { await prisma.turuuSettings.delete({ where: { orgId_key: { orgId: org.id, key: "pending_subscription" } } }); } catch { /* no-op */ }
+    // Санхүүгийн тайланд "манайд төлсөн зардал"-ыг автоматаар гаргахын тулд бодит төлбөрийг бүртгэнэ —
+    // perMonth нь тухайн хугацааны ХЯМДРАЛТАЙ сарын үнэ (жилээр төлсөн бол жилийн хямдралтай үнэ).
+    try {
+      const finalPlan = newPlan || (await prisma.organization.findUnique({ where: { id: org.id }, select: { plan: true } }))?.plan || "starter";
+      const periodKey = Object.keys(PERIOD_MONTHS).find((k) => PERIOD_MONTHS[k] === months) || "monthly";
+      const perMonth = PLAN_PERIOD_PRICE[finalPlan]?.[periodKey] ?? PLAN_PERIOD_PRICE[finalPlan]?.monthly ?? 0;
+      await prisma.auditLog.create({
+        data: { orgId: org.id, actor: "system", role: "system", action: "subscription.paid", target: finalPlan,
+          meta: { plan: finalPlan, months, period: periodKey, perMonth, totalPaid: perMonth * months } },
+      });
+    } catch { /* тайлангийн бүртгэл — үндсэн урсгалд нөлөөлөхгүй */ }
   }
   return { applied: r.count === 1, subscriptionEndsAt };
 }
@@ -113,6 +131,16 @@ async function applyTopupPayment(prisma, orgId) {
     create: { orgId, key: "topup_remaining", value: String(next) },
     update: { value: String(next) },
   });
+
+  // Санхүүгийн тайланд "token/мессежийн нэмэлт зардал"-ыг автоматаар гаргахын тулд бүртгэнэ.
+  try {
+    const { MESSAGE_TOPUP } = require("../lib/planPricing");
+    const amount = MESSAGE_TOPUP[units] || 0;
+    await prisma.auditLog.create({
+      data: { orgId, actor: "system", role: "system", action: "topup.paid", target: String(units), meta: { units, amount } },
+    });
+  } catch { /* тайлангийн бүртгэл — үндсэн урсгалд нөлөөлөхгүй */ }
+
   return { applied: true, added: units, remaining: next };
 }
 

@@ -193,7 +193,7 @@ router.post("/qpay/:orderId", whLimit, async (req, res) => {
       // Идемпотент — зөвхөн PENDING→PAID шилжүүлсэн ганц хүсэлт цааш үргэлжилнэ (давхар мэдэгдэлгүй)
       const upd = await prisma.turuuOrder.updateMany({
         where: { id: order.id, qpayStatus: { not: "PAID" }, status: { not: "PAID" } },
-        data: { qpayStatus: "PAID", status: "PAID" },
+        data: { qpayStatus: "PAID", status: "PAID", paymentMethod: "qpay" },
       });
       if (upd.count !== 1) return;
 

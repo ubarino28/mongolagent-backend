@@ -14,6 +14,7 @@ function invalidatePrompt(orgId) { cache.del(`prompt:${orgId}`); }
 const { getHistory, saveHistory, isNewConversation } = require("../lib/history");
 const { saveLead, saveConsultation, saveOrder, saveAppointment } = require("./lead.service");
 const { getPrisma } = require("../lib/db");
+const storeSync = require("./storeSync.service");
 
 let openai;
 function getOpenAI() {
@@ -130,6 +131,16 @@ setInterval(() => {
   for (const [k, e] of _convThrottle) if (now > e.reset) _convThrottle.delete(k);
 }, 5 * 60_000).unref?.();
 
+const KB_NOT_FOUND_TEXTS = new Set(["Мэдлэгийн сан хоосон байна.", "Мэдлэгийн санд тохирох мэдээлэл олдсонгүй."]);
+
+// flag_unanswered ЗӨВХӨН компанийн ЕРӨНХИЙ мэдээлэл (ажлын цаг, баяр амралт, бодлого, FAQ)
+// олдоогүй тохиолдолд AI-аас хараат бусаар ажиллуулах heuristic — тодорхой бараа/размер/
+// өнгө/нөөц байхгүй асуултыг ЭНД БАРУУ ОРУУЛАХГҮЙ (энэ бол хэвийн бизнесийн хариу).
+const GENERAL_INFO_RE = /цаг(?:ийн)?\s*хуваар|ажлын\s*цаг|хэдэн\s*цагт|нээ(?:х|дэг|нэ)|хаа(?:х|дад|гдд)|амар(?:да|ах|дах)|амралт|баяр|наадам|шинэ\s*жил|буцаа|баталгаа|хүргэлтийн\s*нөхцөл|төлбөрийн\s*нөхцөл|хаяг|байршил|салбар|ажилла.*уу|бодлого|дүрэм|гэрээ/i;
+function isGeneralInfoQuery(query) {
+  return typeof query === "string" && GENERAL_INFO_RE.test(query);
+}
+
 // KB-с хайлт хийх — GPT query-г normalize хийсний дараа дуудна
 // Буцаах нь { text, variantImages } — text нь tool-result-д, variantImages нь
 // хэрэглэгч зураг илгээсэн үед vision харьцуулалтад ашиглагдана
@@ -138,7 +149,7 @@ async function searchKnowledge(orgId, query) {
     const prisma = getPrisma();
     const items = await prisma.turuuKnowledge.findMany({
       where: { orgId: orgId || undefined, active: true },
-      select: { question: true, answer: true, category: true, variants: true },
+      select: { question: true, answer: true, category: true, variants: true, attributes: true },
     });
 
     if (items.length === 0) return { text: "Мэдлэгийн сан хоосон байна.", variantImages: [] };
@@ -161,6 +172,12 @@ async function searchKnowledge(orgId, query) {
     const variantImages = [];
     const text = scored.map((s) => {
       let t = `А: ${s.item.question}\nХ: ${s.item.answer}`;
+      // Барааны үзүүлэлт (Чадал/Хүчдэл/Материал г.м) — AI спец асуултад хариулна
+      const attrs = s.item.attributes && typeof s.item.attributes === "object" ? s.item.attributes : null;
+      if (attrs) {
+        const attrStr = Object.entries(attrs).map(([k, v]) => `${k}: ${v}`).join(", ");
+        if (attrStr) t += `\nҮзүүлэлт: ${attrStr}`;
+      }
       const vars = Array.isArray(s.item.variants) ? s.item.variants : [];
       if (vars.length > 0) {
         // Тоо хэмжээ биш зөвхөн байгаа/байхгүй эсэхийг л дамжуулна — хэрэглэгчид үлдэгдлийн тоог илчлэхгүй
@@ -179,297 +196,8 @@ async function searchKnowledge(orgId, query) {
   }
 }
 
-const TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: "search_knowledge",
-      description: "Хэрэглэгчийн асуултад хамаарах мэдээллийг мэдлэгийн сангаас хайна. Бүтээгдэхүүн, үнэ, хүргэлт, буцаалт, ажлын цаг болон компанийн мэдээлэл авахад ашиглана.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "Хайх үгс — монгол хэлээр, тодорхой" },
-        },
-        required: ["query"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "save_lead",
-      description: "Хэрэглэгч үйлчилгээ сонирхоход нэр, холбоо барих мэдээлэл хадгална.",
-      parameters: {
-        type: "object",
-        properties: {
-          name:            { type: "string" },
-          phone:           { type: "string" },
-          email:           { type: "string" },
-          company:         { type: "string" },
-          serviceInterest: { type: "string" },
-          budget:          { type: "string" },
-          notes:           { type: "string" },
-        },
-        required: ["phone"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "save_consultation",
-      description: "Хэрэглэгч consultation цаг захиалахыг хүсэхэд дуудна.",
-      parameters: {
-        type: "object",
-        properties: {
-          name:            { type: "string" },
-          phone:           { type: "string" },
-          email:           { type: "string" },
-          serviceInterest: { type: "string" },
-          preferredTime:   { type: "string" },
-        },
-        required: ["phone"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "save_order",
-      description: "Хэрэглэгч захиалгаа баталгаажуулж нэр, утас, хаяг өгсний дараа дуудна. ЧУХАЛ: бараа нь өнгө/размер-тэй (variant) бол заавал хэрэглэгчийн СОНГОСОН өнгө болон размерийг тодруулсны дараа л дуудна — мэдэхгүй байхад дуудаж болохгүй.",
-      parameters: {
-        type: "object",
-        properties: {
-          customerName:    { type: "string" },
-          customerPhone:   { type: "string" },
-          customerEmail:   { type: "string" },
-          deliveryAddress: { type: "string" },
-          items: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                name:  { type: "string", description: "Барааны нэр" },
-                color: { type: "string", description: "Сонгосон өнгө (variant байвал заавал)" },
-                size:  { type: "string", description: "Сонгосон размер (variant байвал заавал)" },
-                qty:   { type: "number" },
-                price: { type: "number" },
-              },
-              required: ["name", "qty", "price"],
-            },
-          },
-          totalAmount: { type: "number" },
-          notes:       { type: "string" },
-          payOnPickup: { type: "boolean", description: "Хэрэглэгч очиж авахдаа (дэлгүүр дээр) төлбөрөө төлнө гэвэл true. Энэ тохиолдолд QPay холбоос үүсгэхгүй." },
-        },
-        required: ["customerName", "customerPhone", "items", "totalAmount"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "flag_unanswered",
-      description: "Хэрэглэгчийн асуултад мэдлэгийн санд хариулт байхгүй бол энэ tool-ийг ЭХЛЭЭД дуудна, дараа нь contact fallback хариулт өг.",
-      parameters: {
-        type: "object",
-        properties: {
-          question: { type: "string", description: "Хариулагдаагүй хэрэглэгчийн асуулт" },
-        },
-        required: ["question"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "request_handoff",
-      description: "Хэрэглэгч хүнтэй ярихыг хүсвэл эсвэл AI шийдэж чадахгүй нөхцөл үүсвэл дуудна.",
-      parameters: {
-        type: "object",
-        properties: {
-          reason: { type: "string", description: "Handoff хүссэн шалтгаан" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "check_staff",
-      description: "Байгаа мастеруудын жагсаалтыг авна — нэр, үйлчилгээ, ажлын цаг. Цаг захиалах яриа эхлэхэд эхлээд дуудна.",
-      parameters: { type: "object", properties: {}, required: [] },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "check_availability",
-      description: "Тухайн мастерын тодорхой өдрийн боломжит цагуудыг авна. staffId болон date YYYY-MM-DD форматаар заавал дамжуулна. Хэрэглэгч тодорхой цаг хүссэн бол timeSlot-д HH:MM (24цаг) хэлбэрээр дамжуул — result-ийн requestedAvailable нь тэр цаг чөлөөтэй эсэхийг ХЭЛНЭ.",
-      parameters: {
-        type: "object",
-        properties: {
-          staffId:     { type: "string", description: "Мастерын ID (check_staff-с авна)" },
-          date:        { type: "string", description: "Огноо YYYY-MM-DD форматаар" },
-          serviceName: { type: "string", description: "Үйлчилгээний нэр (байвал тэрнийх duration ашиглана)" },
-          timeSlot:    { type: "string", description: "Хэрэглэгчийн хүссэн цаг HH:MM (24цаг). Жишээ: '2 цагт'→'14:00'. Байвал requestedAvailable буцаана." },
-        },
-        required: ["staffId", "date"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "save_appointment",
-      description: "Хэрэглэгч цаг захиалгаа баталгаажуулсны дараа хадгалах. customerName болон customerPhone ЗААВАЛ авсан байна.",
-      parameters: {
-        type: "object",
-        properties: {
-          staffId:         { type: "string" },
-          staffName:       { type: "string" },
-          serviceName:     { type: "string" },
-          durationMinutes: { type: "number" },
-          date:            { type: "string", description: "YYYY-MM-DD" },
-          timeSlot:        { type: "string", description: "HH:MM" },
-          customerName:    { type: "string" },
-          customerPhone:   { type: "string" },
-          depositAmount:   { type: "number" },
-          notes:           { type: "string" },
-        },
-        required: ["staffId", "serviceName", "durationMinutes", "date", "timeSlot", "customerName", "customerPhone"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "reschedule_appointment",
-      description: "Хэрэглэгч цаг захиалгаа өөрчлөх/шилжүүлэх хүсвэл дуудна. Хуучин цагийг шинэ цаг руу шилжүүлнэ.",
-      parameters: {
-        type: "object",
-        properties: {
-          phone:      { type: "string", description: "Хэрэглэгчийн утасны дугаар" },
-          oldDate:    { type: "string", description: "Хуучин огноо YYYY-MM-DD" },
-          oldTime:    { type: "string", description: "Хуучин цаг HH:MM" },
-          newDate:    { type: "string", description: "Шинэ огноо YYYY-MM-DD" },
-          newTime:    { type: "string", description: "Шинэ цаг HH:MM" },
-        },
-        required: ["phone", "newDate", "newTime"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "check_order",
-      description: "Хэрэглэгчийн захиалгын статус шалгах. Утасны дугаараар хайна. Утас өгөөгүй бол одоогийн чатын хэрэглэгчийн сүүлийн захиалгыг шалгана.",
-      parameters: {
-        type: "object",
-        properties: {
-          phone: { type: "string", description: "Хэрэглэгчийн утасны дугаар" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "confirm_payment",
-      description: "Хэрэглэгч 'төлчлөө', 'явуулчлаа', 'шилжүүлсэн' гэх мэт төлбөр хийснээ мэдэгдсэн үед дуудна. Захиалгын статусыг PAYMENT_SENT болгож эзэнд мэдэгдэл явуулна.",
-      parameters: {
-        type: "object",
-        properties: {
-          notes: { type: "string", description: "Хэрэглэгчийн нэмэлт тайлбар (байвал)" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "check_menu",
-      description: "Бараа/бүтээгдэхүүний жагсаалтыг авна. Хэрэглэгч ТОДОРХОЙ ТӨРӨЛ/АНГИЛАЛ асуувал (жишээ: 'гутал юу байна', 'пүүз байгаа юу', 'цамц харах', 'малгай юу байна') тэр төрлийн нэрийг `category`-д ЗААВАЛ дамжуул (ярианы үг бол каноноор: 'пүүз'→'гутал') — зөвхөн тэр ангилал буцна, token ихээхэн хэмнэнэ. Зөвхөн ЕРӨНХИЙ ('юу зардаг вэ', 'бүх бараагаа харуул') үед л category-г ХООСОН орхи.",
-      parameters: { type: "object", properties: { category: { type: "string", description: "Тодорхой ангилал (жишээ: 'гутал', 'цамц'). Ерөнхий асуулт бол хоосон." } }, required: [] },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "check_tables",
-      description: "Ресторанын сул ширээ шалгана. date, time, guests дамжуулна.",
-      parameters: {
-        type: "object",
-        properties: {
-          date:   { type: "string", description: "YYYY-MM-DD" },
-          time:   { type: "string", description: "HH:MM" },
-          guests: { type: "number", description: "Хэдэн хүн" },
-        },
-        required: ["date", "time", "guests"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "save_reservation",
-      description: "Ширээ захиалга хадгалах. customerName, customerPhone ЗААВАЛ авсан байна.",
-      parameters: {
-        type: "object",
-        properties: {
-          tableId:       { type: "string" },
-          date:          { type: "string", description: "YYYY-MM-DD" },
-          timeSlot:      { type: "string", description: "HH:MM" },
-          guestCount:    { type: "number" },
-          customerName:  { type: "string" },
-          customerPhone: { type: "string" },
-          notes:         { type: "string" },
-        },
-        required: ["tableId", "date", "timeSlot", "guestCount", "customerName", "customerPhone"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "cancel_reservation",
-      description: "Ширээ захиалга цуцлах. Утасны дугаараар хайж CANCELLED болгоно. Тухайн ширээ/цаг автоматаар чөлөөтэй болно.",
-      parameters: {
-        type: "object",
-        properties: {
-          phone: { type: "string", description: "Хэрэглэгчийн утасны дугаар" },
-          date:  { type: "string", description: "Захиалсан огноо YYYY-MM-DD (байвал)" },
-        },
-        required: ["phone"],
-      },
-    },
-  },
-];
+const { toolsForType, GROWTH_ONLY_TOOLS } = require("../lib/aiTools");
 
-// ── Tool-ийг бизнес төрлөөр шүүх — тухайн төрөлд ХЭРЭГГҮЙ tool-уудыг илгээхгүй (токен хэмнэнэ) ──
-// Зөвхөн ТОДОРХОЙ (order/appointment/table урсгал нь мэдэгдэж буй) төрлүүдийг шүүнэ.
-// "other"/тодорхойгүй төрөл → бүх tool (аюулгүй тал, ямар ч урсгалыг дэмжинэ).
-const TOOL_ALWAYS = ["search_knowledge", "save_lead", "save_consultation", "flag_unanswered", "request_handoff"];
-const TOOLS_BY_TYPE = {
-  shop:       [...TOOL_ALWAYS, "check_menu", "save_order", "check_order", "confirm_payment"],
-  restaurant: [...TOOL_ALWAYS, "check_menu", "save_order", "check_order", "confirm_payment", "check_tables", "save_reservation", "cancel_reservation"],
-  salon:      [...TOOL_ALWAYS, "check_staff", "check_availability", "save_appointment", "reschedule_appointment"],
-  clinic:     [...TOOL_ALWAYS, "check_staff", "check_availability", "save_appointment", "reschedule_appointment"],
-  service:    [...TOOL_ALWAYS, "check_staff", "check_availability", "save_appointment", "reschedule_appointment"],
-};
-function toolsForType(businessType) {
-  const names = TOOLS_BY_TYPE[businessType];
-  return names ? TOOLS.filter((t) => names.includes(t.function.name)) : TOOLS;
-}
-
-// Growth+ багцаас нээгддэг tool-ууд (Захиалга/QPay, Цаг захиалга, Хүн handoff).
-// Starter багцад эдгээрийг activeTools-оос хасна — AI дуудаж чадахгүй болно.
-const GROWTH_ONLY_TOOLS = new Set([
-  "save_order", "check_order", "confirm_payment",
-  "save_appointment", "reschedule_appointment", "check_availability", "check_staff",
-  "save_reservation", "cancel_reservation", "check_tables",
-  "request_handoff",
-]);
 // business_type-ийг 60с кэшилнэ (prompt cache-тэй ижил хугацаа)
 function cachedBusinessType(orgId) {
   if (!orgId) return Promise.resolve(null);
@@ -659,6 +387,10 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
 
   const choice = response.choices[0];
   let replyText = "";
+  // flag_unanswered-ийг LLM-ийн мэдрэмжинд бүрэн найдахгүй, код түвшинд баталгаажуулах —
+  // ерөнхий company info асуултад "олдсонгүй" гарсан ч AI tool дуудахгүй өнгөрч болзошгүй.
+  let flagUnansweredCalled = false;
+  const notFoundGeneralQueries = [];
 
   if (choice.finish_reason === "tool_calls") {
     const toolCalls = choice.message.tool_calls;
@@ -677,34 +409,65 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true }) });
 
       } else if (toolCall.function.name === "save_order") {
+        // ХАМГААЛАЛТ: хүргэлттэй захиалгыг ХАЯГГҮЙГЭЭР үүсгэхгүй — эхлээд хаягийг ав.
+        // (AI заримдаа нэр+утас дээр эрт save_order дуудаж, хаяг/баталгаажуулалтыг алгасдаг тул
+        //  захиалга хаяггүй үүсэж, хойно өгсөн хаяг захиалгад ордоггүй асуудлаас сэргийлнэ.)
+        if (!args.payOnPickup && !(args.deliveryAddress || "").trim()) {
+          toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({
+            success: false, needAddress: true,
+            message: "Захиалга хараахан үүсгэсэнгүй. Хүргэлттэй захиалгад дэлгэрэнгүй ХАЯГ (дүүрэг, хороо, байр/тоот) шаардлагатай. Хэрэглэгчээс хүргэлтийн хаягийг асууж аваад, бүх мэдээллийг баталгаажуулсны дараа save_order-г ДАХИН дуудна уу.",
+          }) });
+          continue;
+        }
         const order = await saveOrder({ psid, orgId, ...args });
+        if (orgId && order?.id && !order.duplicate) cache.invalidateOrg(orgId); // шинэ захиалга → тайлан шинэчлэгдэнэ
 
         // Stock автоматаар хасах (давтан бол алгасна)
         if (orgId && order?.id && !order.duplicate) {
           try {
             const orderItems = Array.isArray(args.items) ? args.items : [];
+            // KB-г ЛООП-ИЙН ӨМНӨ нэг л удаа тат (өмнө бараа бүрд дахин татдаг байсан = N+1).
+            const kbItems = await prisma.turuuKnowledge.findMany({ where: { orgId, active: true }, select: { id: true, question: true, variants: true } });
+            // KB бүрд хасалтыг НЭГТГЭНЭ (нэг захиалгад ижил барааны 2 variant орвол дарж бичихээс сэргийлнэ).
+            const work = new Map(); // kbId -> { variants (ажлын хувь) }
             for (const it of orderItems) {
               if (!it.name || !it.qty) continue;
-              const kbItems = await prisma.turuuKnowledge.findMany({ where: { orgId, active: true }, select: { id: true, question: true, variants: true } });
               const match = kbItems.find((k) => normalizeText(k.question).includes(normalizeText(it.name)) || normalizeText(it.name).includes(normalizeText(k.question)));
-              if (match && Array.isArray(match.variants) && match.variants.length > 0) {
-                const newVariants = match.variants.map((v) => {
-                  const colorOk = !it.color || normalizeText(v.color || "").includes(normalizeText(it.color)) || normalizeText(it.color).includes(normalizeText(v.color || ""));
-                  const sizeOk = !it.size || String(v.size || "").toLowerCase() === String(it.size).toLowerCase();
-                  if (colorOk && sizeOk) return { ...v, stock: Math.max(0, (v.stock || 0) - (it.qty || 1)) };
-                  return v;
-                });
-                await prisma.turuuKnowledge.update({ where: { id: match.id }, data: { variants: newVariants } });
+              if (!match || !Array.isArray(match.variants) || match.variants.length === 0) continue;
+              if (!work.has(match.id)) work.set(match.id, match.variants.map((v) => ({ ...v })));
+              const variants = work.get(match.id);
+              for (const v of variants) {
+                const colorOk = !it.color || normalizeText(v.color || "").includes(normalizeText(it.color)) || normalizeText(it.color).includes(normalizeText(v.color || ""));
+                const sizeOk = !it.size || String(v.size || "").toLowerCase() === String(it.size).toLowerCase();
+                if (colorOk && sizeOk) v.stock = Math.max(0, (v.stock || 0) - (it.qty || 1));
               }
+            }
+            // KB тус бүрд НЭГ update + вэбсайтын Product.stock руу sync (нөөц уялдана)
+            for (const [kbId, variants] of work) {
+              await prisma.turuuKnowledge.update({ where: { id: kbId }, data: { variants } });
+              const fresh = await prisma.turuuKnowledge.findUnique({ where: { id: kbId } });
+              if (fresh) await storeSync.syncKnowledgeToStore(orgId, fresh);
             }
           } catch (e) { console.error("[auto-stock]", e.message); }
         }
 
-        // QPay auto-invoice: org-д merchant + данс тохируулсан бол автоматаар QR үүсгэнэ
-        // (давтан дуудсан захиалга бол дахин invoice үүсгэхгүй — аль хэдийн явуулсан)
-        // payOnPickup бол QPay огт үүсгэхгүй — хэрэглэгч дэлгүүр дээр төлнө
+        // QPay auto-invoice: org-д merchant + данс тохируулсан бол автоматаар QR үүсгэнэ.
+        // Давтан дуудсан захиалга (жишээ нь хэрэглэгч 24 цагийн дараа "дахиад QPay явуулаач" гэвэл)
+        // бол ШИНЭ invoice үүсгэхгүй — аль хэдийн үүссэн хуучин QR/холбоосыг л дахин илгээнэ.
+        // payOnPickup бол QPay огт үүсгэхгүй — хэрэглэгч дэлгүүр дээр төлнө.
         let qpayInfo = null;
-        if (orgId && order?.id && !order.duplicate && !args.payOnPickup) {
+        if (orgId && order?.id && order.duplicate && order.qpayInvoiceId && !args.payOnPickup) {
+          try {
+            const qpay = require("./qpay.service");
+            qpayInfo = qpay.buildPaymentMessage(
+              { urls: order.qpayUrls, qr_text: order.qpayQrText },
+              order.totalAmount,
+              order.id.slice(-6).toUpperCase()
+            );
+          } catch (qErr) {
+            console.error("[QPay resend]", qErr.message);
+          }
+        } else if (orgId && order?.id && !order.duplicate && !args.payOnPickup) {
           try {
             const org = await prisma.organization.findUnique({
               where: { id: orgId },
@@ -750,8 +513,10 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         const { text, variantImages: vImgs } = await searchKnowledge(orgId, args.query);
         toolResults.push({ tool_call_id: toolCall.id, content: text });
         variantImages.push(...vImgs);
+        if (KB_NOT_FOUND_TEXTS.has(text) && isGeneralInfoQuery(args.query)) notFoundGeneralQueries.push(args.query);
 
       } else if (toolCall.function.name === "flag_unanswered") {
+        flagUnansweredCalled = true;
         // Хариулагдаагүй асуултыг DB-д хадгала
         try {
           await prisma.turuuUnanswered.create({
@@ -1080,6 +845,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         if (tc.function.name === "search_knowledge") {
           const { text } = await searchKnowledge(orgId, a.query);
           toolResults2.push({ tool_call_id: tc.id, content: text });
+          if (KB_NOT_FOUND_TEXTS.has(text) && isGeneralInfoQuery(a.query)) notFoundGeneralQueries.push(a.query);
         } else {
           toolResults2.push({ tool_call_id: tc.id, content: JSON.stringify({ error: "2-р round-д зөвхөн search_knowledge дэмжигдэнэ" }) });
         }
@@ -1097,6 +863,17 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
 
   } else {
     replyText = choice.message.content?.trim() || "";
+  }
+
+  // Код түвшний баталгаа: ерөнхий компанийн мэдээлэл (цаг, амралт, бодлого г.м) KB-д олдоогүй
+  // атал AI flag_unanswered дуудаагүй бол автоматаар бүртгэнэ — LLM-ийн tool-choice
+  // алгасалтаас үл хамааран "хариулагдаагүй" мэдэгдэл найдвартай ирнэ.
+  if (!flagUnansweredCalled && notFoundGeneralQueries.length > 0 && orgId) {
+    try {
+      await prisma.turuuUnanswered.create({
+        data: { orgId, question: notFoundGeneralQueries[0], psid },
+      });
+    } catch { /* non-blocking */ }
   }
 
   const historyUserContent = imageUrl ? (userText || "[ЗУРАГ ИЛГЭЭСЭН]") : userText;
@@ -1258,4 +1035,4 @@ async function transcribeAudio(audioUrl) {
   }
 }
 
-module.exports = { processMessage: queuedProcessMessage, processReceiptImage, processImageMessage, transcribeAudio, invalidatePrompt, convAllowed };
+module.exports = { processMessage: queuedProcessMessage, processReceiptImage, processImageMessage, transcribeAudio, invalidatePrompt, convAllowed, isGeneralInfoQuery, KB_NOT_FOUND_TEXTS };

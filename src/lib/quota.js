@@ -153,8 +153,54 @@ async function bumpTestChatUsage(orgId) {
   return { count: usage.count, free: usage.count <= FREE_TEST_CHAT_PER_MONTH };
 }
 
+// ─── Заавар туслах AI-гийн сарын хязгаар ─────────────────────────────────────
+// Заавар туслах (app + website ХОЁУЛАА энэ endpoint-ыг дуудна) org тус бүр сард
+// дээд тал нь 50 message. TuruuSettings-д хадгална, сар солигдвол автомат reset.
+const ASSISTANT_MONTHLY_LIMIT = 50;
+const ASSISTANT_KEY = "assistant_usage";
+const _ym = () => { const n = new Date(); return `${n.getFullYear()}-${n.getMonth() + 1}`; };
+
+// Нэмэгдүүлэлгүйгээр одоогийн үлдэгдлийг унших (чат нээгдэхэд харуулах).
+async function getAssistantUsage(orgId) {
+  const prisma = getPrisma();
+  const month = _ym();
+  try {
+    const row = await prisma.turuuSettings.findUnique({ where: { orgId_key: { orgId, key: ASSISTANT_KEY } } });
+    let count = 0;
+    if (row) { try { const p = JSON.parse(row.value); if (p && p.month === month) count = p.count || 0; } catch { /* reset */ } }
+    return { used: count, remaining: Math.max(0, ASSISTANT_MONTHLY_LIMIT - count), limit: ASSISTANT_MONTHLY_LIMIT };
+  } catch { return { used: 0, remaining: ASSISTANT_MONTHLY_LIMIT, limit: ASSISTANT_MONTHLY_LIMIT }; }
+}
+
+// Нэг message зарцуулж, зөвшөөрсөн эсэх + үлдэгдлийг буцаана. Хязгаар хүрсэн бол allowed=false.
+async function bumpAssistantUsage(orgId) {
+  const prisma = getPrisma();
+  const month = _ym();
+  let usage = { month, count: 0 };
+  try {
+    const row = await prisma.turuuSettings.findUnique({ where: { orgId_key: { orgId, key: ASSISTANT_KEY } } });
+    if (row) { try { const p = JSON.parse(row.value); if (p && p.month) usage = p; } catch { /* reset */ } }
+    if (usage.month !== month) usage = { month, count: 0 };
+    if (usage.count >= ASSISTANT_MONTHLY_LIMIT) {
+      return { allowed: false, used: usage.count, remaining: 0, limit: ASSISTANT_MONTHLY_LIMIT };
+    }
+    usage.count += 1;
+    await prisma.turuuSettings.upsert({
+      where: { orgId_key: { orgId, key: ASSISTANT_KEY } },
+      create: { orgId, key: ASSISTANT_KEY, value: JSON.stringify(usage) },
+      update: { value: JSON.stringify(usage) },
+    });
+    return { allowed: true, used: usage.count, remaining: ASSISTANT_MONTHLY_LIMIT - usage.count, limit: ASSISTANT_MONTHLY_LIMIT };
+  } catch (e) {
+    console.error("[quota] bumpAssistantUsage:", e.message);
+    // DB алдаа гарвал заавар авахад саад болгохгүй (блоклохгүй)
+    return { allowed: true, used: 0, remaining: ASSISTANT_MONTHLY_LIMIT, limit: ASSISTANT_MONTHLY_LIMIT };
+  }
+}
+
 module.exports = {
   FREE_TEST_CHAT_PER_MONTH, PDF_IMPORT_COST, EXCEL_IMPORT_COST, TOPUP_KEY,
   incrementMessageUsedBy, bumpTestChatUsage, isOrgExpired,
   getTopupRemaining, setTopupRemaining, addTopupCredits, getQuotaStatus, markQuotaNotice,
+  ASSISTANT_MONTHLY_LIMIT, getAssistantUsage, bumpAssistantUsage,
 };

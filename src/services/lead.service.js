@@ -81,14 +81,12 @@ async function saveOrder({ psid, orgId = null, customerName, customerPhone, cust
     notes = notes ? `${notes} | ${suffix}` : suffix;
   }
 
-  // Idempotency: AI ижил захиалгад save_order-ыг давтан дуудвал (жишээ нь "дансаар төлье" гэсний дараа)
-  // сүүлийн 30 минутад ижил psid+totalAmount-тай NEW захиалга байгаа бол давтахгүй
+  // Idempotency: AI ижил захиалгад save_order-ыг давтан дуудвал (жишээ нь "дансаар төлье" гэсний дараа,
+  // эсвэл хэрэглэгч хожим дахин "QPay явуулаач" гэвэл) ижил psid+totalAmount-тай NEW захиалга ХЭДИЙД Ч
+  // байсан шинэ захиалга үүсгэхгүй — зөвхөн 48 цагийн auto-cancel-аар (src/index.js) хугацаа дуусна.
   if (psid) {
     const recent = await prisma.turuuOrder.findFirst({
-      where: {
-        psid, orgId, status: "NEW", totalAmount,
-        createdAt: { gte: new Date(Date.now() - 30 * 60 * 1000) },
-      },
+      where: { psid, orgId, status: "NEW", totalAmount },
       orderBy: { createdAt: "desc" },
     });
     if (recent) return { ...recent, duplicate: true };

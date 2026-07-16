@@ -11,6 +11,7 @@ const platformQpay = require("../services/subscription-qpay.service");
 const { fulfillDomainOrder } = require("../services/domain.service");
 const { logAudit } = require("../services/audit.service");
 const { generateSections } = require("../services/aiSection.service");
+const storeSync = require("../services/storeSync.service");
 const bcrypt = require("bcryptjs");
 
 const router = express.Router();
@@ -199,6 +200,15 @@ router.post("/", async (req, res) => {
     const template = allow.tpl;
     const org = await prisma.organization.findUnique({ where: { id: req.org.orgId }, select: { slug: true, name: true } });
 
+    // Бизнес аппдаа бараагаа (KB "Бүтээгдэхүүн" ангилал) урьдчилж бүртгэсэн бол дэлгүүр
+    // үүсэх агшинд ЖИНХЭНЭ бараагаа Product болгон backfill хийнэ (эс тэгвэл зөвхөн загварын
+    // demo бараа гарч, өөрсдийн бараа сайт дээр огт харагдахгүй байсан). knowledgeId-аар upsert
+    // хийдэг тул давхардахгүй. Жинхэнэ бараатай бол demo-г суулгахгүй (илүүц/төөрөгдүүлэхгүй).
+    const productKb = await prisma.turuuKnowledge.findMany({
+      where: { orgId: req.org.orgId, active: true, category: { startsWith: "Бүтээгдэхүүн" } },
+    });
+    const hasRealProducts = productKb.length > 0;
+
     // Домэйн (subdomain)-г дэлгүүрийн нэрнээс үүсгэнэ (жишээ: "Inca" → inca.mongolagent.mn).
     // Хэрэглэгч тусгай slug дамжуулсан бол түүнийг, эс бөгөөс нэрийг, эцэст нь org slug-г ашиглана.
     const storeSlug = await uniqueStoreSlug(prisma, slug || name || org?.slug || req.org.slug, null);
@@ -228,8 +238,9 @@ router.post("/", async (req, res) => {
               })),
             }
           : undefined,
-        // Template-ийн demo бараа — дэлгүүр шууд дүүрэн харагдана
-        products: template?.demoProducts
+        // Template-ийн demo бараа — ЗӨВХӨН жинхэнэ бараагүй шинэ org-д (сайт хоосон харагдахгүй).
+        // Жинхэнэ бараатай бол доор backfill-аар өөрсдийн бараа орно.
+        products: (!hasRealProducts && template?.demoProducts)
           ? {
               create: template.demoProducts.map((p, i) => ({
                 orgId: req.org.orgId,
@@ -248,6 +259,13 @@ router.post("/", async (req, res) => {
       },
       include: { pages: true },
     });
+
+    // Жинхэнэ бараагаа Store Product руу backfill — сайт үүсэнгүүт бүтээгдэхүүн дүүрэн харагдана.
+    // Store үүссэний ДАРАА дуудна (findStore нь шинэ store-ийг олно). Алдаа гарвал store үүсэлтийг
+    // унагахгүй (best-effort) — бараа дараа нь KB засахад дахин sync хийгдэнэ.
+    if (hasRealProducts) {
+      await storeSync.syncManyKnowledgeToStore(req.org.orgId, productKb).catch((e) => console.error("[store.create] backfill:", e.message));
+    }
 
     // Домэйнийг ҮҮСГЭХ агшинд бүртгэж, SSL гарах хүртэл хүлээнэ (гацвал автоматаар
     // дахин trigger хийнэ) — ингэснээр линк үүсэмгүй шууд ажиллана.
@@ -607,13 +625,34 @@ router.delete("/products/:id", async (req, res) => {
 
 // ─── Orders (эзэн харах) ────────────────────────────────────────────────────────
 
-// GET /store/orders
+// GET /store/orders — вэбсайтын захиалга (StoreOrder) + Messenger/гараар (TuruuOrder)-ийг
+// channel тэмдэглэгээтэй нэгтгэж буцаана. Ингэснээр вэбсайтын dashboard дээр ч аль сувгаас
+// захиалга ирснийг бүгдийг харна.
 router.get("/orders", async (req, res) => {
   try {
     const prisma = getPrisma();
-    const store = await prisma.store.findUnique({ where: { orgId: req.org.orgId }, select: { id: true } });
+    const orgId = req.org.orgId;
+    const store = await prisma.store.findUnique({ where: { orgId }, select: { id: true } });
     if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
-    const orders = await prisma.storeOrder.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "desc" } });
+
+    // Санах ойн аюулгүй хязгаар — хүснэгт бүрээс сүүлийн 2000 захиалга (хуудаслалтгүй тул
+    // хязгааргүй татахаас сэргийлнэ). Бүрэн хуудаслалт нь store-admin frontend-ийн дэмжлэг шаардна.
+    const [wOrders, tOrders] = await Promise.all([
+      prisma.storeOrder.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "desc" }, take: 2000 }),
+      prisma.turuuOrder.findMany({ where: { orgId }, orderBy: { createdAt: "desc" }, take: 2000 }).catch(() => []),
+    ]);
+
+    const orders = [
+      ...wOrders.map((o) => ({ ...o, channel: "website" })),
+      ...tOrders.map((o) => ({
+        id: o.id, orgId: o.orgId, storeId: store.id,
+        customerName: o.customerName, customerPhone: o.customerPhone, customerEmail: o.customerEmail,
+        deliveryAddress: o.deliveryAddress, items: o.items, totalAmount: o.totalAmount,
+        status: o.status, notes: o.notes, qpayStatus: o.qpayStatus,
+        createdAt: o.createdAt, updatedAt: o.updatedAt, channel: o.psid ? "messenger" : "app",
+      })),
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
     res.json({ orders });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });

@@ -35,4 +35,12 @@ setInterval(() => {
   for (const [k, e] of store) if (now > e.exp) store.delete(k);
 }, 10 * 60_000).unref?.();
 
-module.exports = { get, set, del, getOrSet };
+// Тухайн org-ийн analytics/report/funnel кэшийг бүгдийг цэвэрлэнэ (шинэ борлуулалт шууд харагдуулах)
+function invalidateOrg(orgId) {
+  if (!orgId) return;
+  del(`report:${orgId}`);
+  del(`analytics:${orgId}`);
+  del(`funnel:${orgId}`);
+}
+
+module.exports = { get, set, del, getOrSet, invalidateOrg };

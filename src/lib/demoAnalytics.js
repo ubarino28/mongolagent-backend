@@ -80,7 +80,27 @@ function demoReport(N) {
     appointments: Math.round(totals.revenue * 0.2), appointmentsCount: Math.round(totals.orders * 0.55),
     store: Math.round(totals.revenue * 0.12), storeCount: Math.round(totals.orders * 0.2),
   };
-  return { months: N, monthly: months, totals, revenueBySource };
+  const revenueByChannel = [
+    { key: "qpay", label: "QPay", amount: Math.round(totals.revenue * 0.52), count: Math.round(totals.orders * 0.55) },
+    { key: "bank", label: "Дансаар", amount: Math.round(totals.revenue * 0.24), count: Math.round(totals.orders * 0.25) },
+    { key: "website", label: "Вэбсайт (QPay)", amount: Math.round(totals.revenue * 0.12), count: Math.round(totals.orders * 0.12) },
+    { key: "cash", label: "Бэлнээр", amount: Math.round(totals.revenue * 0.12), count: Math.round(totals.orders * 0.08) },
+  ];
+  const topProducts = [
+    { name: "Nike Air Force 1", qty: Math.round(totals.orders * 0.18), revenue: Math.round(totals.revenue * 0.14) },
+    { name: "Adidas Superstar", qty: Math.round(totals.orders * 0.14), revenue: Math.round(totals.revenue * 0.1) },
+    { name: "Jordan 1 Low", qty: Math.round(totals.orders * 0.09), revenue: Math.round(totals.revenue * 0.09) },
+    { name: "Puma Suede", qty: Math.round(totals.orders * 0.07), revenue: Math.round(totals.revenue * 0.06) },
+    { name: "Vans Old Skool", qty: Math.round(totals.orders * 0.06), revenue: Math.round(totals.revenue * 0.05) },
+  ];
+  const platformCost = {
+    aiAgent: { amount: 99900 * N, estimated: false, plan: "growth" },
+    website: { amount: 99000 * N, monthly: 99000 * N, template: 0 },
+    tokens: { amount: Math.round(totals.revenue * 0.006) },
+    total: 0,
+  };
+  platformCost.total = platformCost.aiAgent.amount + platformCost.website.amount + platformCost.tokens.amount;
+  return { months: N, monthly: months, totals, revenueBySource, revenueByChannel, topProducts, platformCost };
 }
 
 module.exports = { demoAnalytics, demoFunnel, demoReport, DEMO_ON: () => process.env.DEMO_ANALYTICS === "1" };
