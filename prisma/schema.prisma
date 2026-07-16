@@ -179,11 +179,13 @@ model TuruuOrder {
   qpayQrText      String?
   qpayUrls        Json?
   qpayStatus      String?      @default("PENDING")
+  paymentMethod   String?      // "qpay" | "bank" | "cash" — орлого хэрхэн орж ирснийг тэмдэглэнэ
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
   @@index([orgId])
   @@index([qpayInvoiceId])
+  @@index([orgId, status, createdAt]) // захиалгын жагсаалт/тайлангийн гол хайлт (scale)
 }
 
 model TuruuSettings {
@@ -197,16 +199,17 @@ model TuruuSettings {
 }
 
 model TuruuKnowledge {
-  id        String   @id @default(uuid())
-  orgId     String?
-  question  String
-  answer    String
-  category  String?
-  imageUrl  String?
-  variants  Json?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(uuid())
+  orgId      String?
+  question   String
+  answer     String
+  category   String?
+  imageUrl   String?
+  variants   Json?
+  attributes Json?    // барааны үзүүлэлт { "Чадал": "2000W", "Хүчдэл": "220V" } — category загвараар
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@index([orgId, active])
 }
@@ -380,12 +383,14 @@ model Product {
   storeId        String
   store          Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
   orgId          String
+  knowledgeId    String?  @unique // мэдлэгийн сан (TuruuKnowledge)-тай холбоос — sync-ээр үүссэн бол
   name           String
   description    String?
   price          Float    @default(0)
   compareAtPrice Float?
   images         Json     @default("[]")
   variants       Json     @default("[]") // [{ name: "Хэмжээ", values: ["S","M","L"] }]
+  attributes     Json?    // барааны үзүүлэлт { "Чадал": "2000W" } — KB-ээс sync-лэгдэнэ
   stock          Int      @default(0)
   sku            String?
   category       String?
@@ -511,4 +516,5 @@ model StoreOrder {
   @@index([orgId])
   @@index([qpayInvoiceId])
   @@index([status])
+  @@index([orgId, status, createdAt]) // захиалгын жагсаалт/тайлангийн гол хайлт (scale)
 }

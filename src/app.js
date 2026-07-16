@@ -104,6 +104,49 @@ const { getPrisma } = require("./lib/db");
     await prisma.$executeRawUnsafe(
       `ALTER TABLE "TuruuChat" ADD COLUMN IF NOT EXISTS "platform" TEXT DEFAULT 'facebook'`
     );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "TuruuOrder" ADD COLUMN IF NOT EXISTS "paymentMethod" TEXT`
+    );
+    // Мэдлэгийн сан ↔ вэбсайтын бараа sync-ийн холбоос багана
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "knowledgeId" TEXT`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "Product_knowledgeId_key" ON "Product"("knowledgeId")`
+    );
+    // Барааны үзүүлэлт (category загвараар) — чадал/хүчдэл/материал г.м
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "TuruuKnowledge" ADD COLUMN IF NOT EXISTS "attributes" JSONB`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "attributes" JSONB`
+    );
+    // Банкны тайлангийн БАТАЛГААЖУУЛАЛТ — өөрчлөшгүй snapshot. Тайлан төлбөр төлөгдөх үед
+    // серверийн жинхэнэ тоог түгжиж, код/URL-ээр гуравдагч тал (банк) шалгах боломжтой болгоно.
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "ReportSnapshot" (
+        "id" TEXT PRIMARY KEY,
+        "orgId" TEXT NOT NULL,
+        "code" TEXT UNIQUE NOT NULL,
+        "months" INTEGER NOT NULL,
+        "periodLabel" TEXT,
+        "bizName" TEXT,
+        "verifiedRevenue" DOUBLE PRECISION DEFAULT 0,
+        "selfReportedRevenue" DOUBLE PRECISION DEFAULT 0,
+        "totalRevenue" DOUBLE PRECISION DEFAULT 0,
+        "verifiedOrders" INTEGER DEFAULT 0,
+        "totalOrders" INTEGER DEFAULT 0,
+        "figures" JSONB,
+        "createdAt" TIMESTAMP DEFAULT now()
+      )
+    `);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "ReportSnapshot_orgId_idx" ON "ReportSnapshot"("orgId")`);
+    // Композит index — захиалгын жагсаалт/тайлангийн гол хайлт (orgId+status+createdAt).
+    // Хүснэгт одоо жижиг тул энгийн CREATE INDEX шууд ажиллана (түгжээ мэдэгдэхгүй).
+    // (CONCURRENTLY нь Prisma-гийн raw query дотор ажиллахгүй; аль хэдийн асар том
+    //  хүснэгтэд index нэмэх бол psql-ээр CONCURRENTLY ашиглана.)
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "TuruuOrder_orgId_status_createdAt_idx" ON "TuruuOrder"("orgId","status","createdAt")`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "StoreOrder_orgId_status_createdAt_idx" ON "StoreOrder"("orgId","status","createdAt")`);
   } catch (e) {
     console.warn("[migration]", e.message);
   }
@@ -173,6 +216,8 @@ app.use("/client", clientRouter);
 app.use("/store", storeRouter);
 // Storefront нь нийтийн — custom домэйн дээрх дэлгүүрүүд ч хандах тул бүх origin зөвшөөрнө
 app.use("/storefront", cors({ origin: true }), storefrontRouter);
+// Тайлан баталгаажуулалт — НИЙТИЙН (auth-гүй). Банк код/URL-ээр орж жинхэнэ тоог шалгана.
+app.use("/verify", cors({ origin: true }), require("./routes/verify.routes"));
 
 // Сүүлчийн алдаа баригч — Sentry-д илгээж, цэвэр 500 буцаана
 // eslint-disable-next-line no-unused-vars
