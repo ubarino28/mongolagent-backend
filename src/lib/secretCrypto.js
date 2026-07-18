@@ -1,5 +1,5 @@
 "use strict";
-// Эмзэг талбарын (fbPageToken, telegramBotToken, qpay данс г.м) at-rest шифрлэлт.
+// Эмзэг талбарын (fbPageToken, qpay данс г.м) at-rest шифрлэлт.
 // AES-256-GCM. ENCRYPTION_KEY (32 байт, hex эсвэл base64) env тохируулсан үед л идэвхжинэ —
 // эс бол NO-OP (одоогийн зан хадгална, юу ч эвдэхгүй).
 //

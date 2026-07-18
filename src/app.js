@@ -13,7 +13,7 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
 
 const express = require("express");
 const cors = require("cors");
-// Бүх axios дуудлагад глобал timeout (QPay/Facebook/Telegram/Vercel) — гадны API удааширвал
+// Бүх axios дуудлагад глобал timeout (QPay/Facebook/Vercel) — гадны API удааширвал
 // хүсэлт хязгааргүй гацахаас сэргийлнэ (axios-ийн анхдагч = timeout байхгүй).
 require("axios").defaults.timeout = 20000;
 const webhookRouter = require("./routes/webhook.routes");

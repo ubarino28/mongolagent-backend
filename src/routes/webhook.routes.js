@@ -6,7 +6,7 @@ const { sendText, sendTypingOn } = require("../services/facebook.service");
 const { getPrisma } = require("../lib/db");
 const { checkPayment } = require("../services/qpay.service");
 const { rateLimit } = require("../middleware/rateLimit");
-const telegram = require("../services/telegram.service");
+const { notifyOwner } = require("../services/notify.service");
 const { applySubscriptionPayment, applyTopupPayment } = require("../services/payment.service");
 const { decrypt } = require("../lib/secretCrypto");
 
@@ -197,13 +197,12 @@ router.post("/qpay/:orderId", whLimit, async (req, res) => {
       });
       if (upd.count !== 1) return;
 
-      // Telegram мэдэгдэл
-      if (order.orgId) {
-        try {
-          const text = `✅ QPay төлбөр хийгдлээ!\nЗахиалга #${order.id.slice(-6).toUpperCase()}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}`;
-          await telegram.notifyText(order.orgId, text);
-        } catch { /* non-blocking */ }
-      }
+      // И-мэйл мэдэгдэл эзэн рүү
+      notifyOwner(order.orgId, "QPay төлбөр хийгдлээ", {
+        Захиалга: `#${order.id.slice(-6).toUpperCase()}`,
+        Дүн: `₮${Number(order.totalAmount || 0).toLocaleString()}`,
+        Хэрэглэгч: order.customerName || "—",
+      }, { label: "Захиалгаа харах", path: "/orders" }).catch(() => {});
 
       // Facebook Messenger-д баталгаажуулалт явуулах
       if (order.psid && order.orgId) {
@@ -252,11 +251,13 @@ router.post("/qpay-store/:orderId", whLimit, async (req, res) => {
       const newlyPaid = await markStoreOrderPaid(prisma, order);
       if (!newlyPaid) return;
 
-      // Telegram мэдэгдэл
-      try {
-        const text = `🛒 Дэлгүүрийн захиалга төлөгдлөө!\nЗахиалга #${order.id.slice(-6).toUpperCase()}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}\nУтас: ${order.customerPhone || "—"}`;
-        await telegram.notifyText(order.orgId, text);
-      } catch { /* non-blocking */ }
+      // И-мэйл мэдэгдэл эзэн рүү
+      notifyOwner(order.orgId, "Дэлгүүрийн захиалга төлөгдлөө", {
+        Захиалга: `#${order.id.slice(-6).toUpperCase()}`,
+        Дүн: `₮${Number(order.totalAmount || 0).toLocaleString()}`,
+        Хэрэглэгч: order.customerName || "—",
+        Утас: order.customerPhone || "—",
+      }, { label: "Захиалгаа харах", path: "/website/orders" }).catch(() => {});
 
       console.log(`[QPay-store] Order ${order.id} PAID`);
     } catch (err) {
@@ -293,13 +294,14 @@ router.post("/qpay-appointment/:appointmentId", whLimit, async (req, res) => {
       });
       if (updAppt.count !== 1) return;
 
-      // Telegram мэдэгдэл
-      if (appt.orgId) {
-        try {
-          const text = `✅ Урьдчилгаа төлөгдлөө!\n${appt.staff?.name || "—"} · ${appt.serviceName}\n📅 ${appt.date} ${appt.timeSlot}\n💰 ₮${Number(appt.depositAmount || 0).toLocaleString()}\n👤 ${appt.customerName || "—"}`;
-          await telegram.notifyText(appt.orgId, text);
-        } catch { /* non-blocking */ }
-      }
+      // И-мэйл мэдэгдэл эзэн рүү
+      notifyOwner(appt.orgId, "Урьдчилгаа төлөгдлөө", {
+        Ажилтан: appt.staff?.name || "—",
+        Үйлчилгээ: appt.serviceName,
+        Огноо: `${appt.date} ${appt.timeSlot}`,
+        Урьдчилгаа: `₮${Number(appt.depositAmount || 0).toLocaleString()}`,
+        Хэрэглэгч: appt.customerName || "—",
+      }, { label: "Цагийн захиалга харах", path: "/appointments" }).catch(() => {});
 
       // Facebook Messenger баталгаажуулалт
       if (appt.psid && appt.orgId) {
@@ -335,7 +337,7 @@ router.post("/sub-qpay/:orgId", whLimit, async (req, res) => {
       const prisma = getPrisma();
       const org = await prisma.organization.findUnique({
         where: { id: req.params.orgId },
-        select: { id: true, subInvoiceId: true, subQpayStatus: true, subscriptionEndsAt: true, name: true, telegramBotToken: true, telegramChatId: true },
+        select: { id: true, subInvoiceId: true, subQpayStatus: true, subscriptionEndsAt: true },
       });
       if (!org?.subInvoiceId || org.subQpayStatus === "PAID") return;
 
@@ -350,13 +352,9 @@ router.post("/sub-qpay/:orgId", whLimit, async (req, res) => {
       const { applied, subscriptionEndsAt } = await applySubscriptionPayment(prisma, org);
       if (!applied) return;
 
-      // Telegram мэдэгдэл — платформ admin-д (env бот). notifyText(null) → платформын env ашиглана.
-      try {
-        const text = `💰 Subscription төлбөр хийгдлээ!\nКлиент: ${org.name}\nДуусах огноо: ${subscriptionEndsAt.toLocaleDateString("mn-MN")}`;
-        await telegram.notifyText(null, text);
-      } catch { /* non-blocking */ }
-
-      console.log(`[SubQPay] Org ${org.id} subscription renewed`);
+      // Платформын түвшний бүртгэл — applySubscriptionPayment дотор AuditLog
+      // ("subscription.paid") үүсдэг тул admin эндээс мөрдөж болно.
+      console.log(`[SubQPay] Org ${org.id} subscription renewed until ${subscriptionEndsAt.toISOString()}`);
     } catch (err) {
       console.error("[SubQPay callback]", err.message);
     }

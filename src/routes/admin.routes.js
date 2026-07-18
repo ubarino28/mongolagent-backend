@@ -392,8 +392,6 @@ router.get("/organizations/:id", async (req, res) => {
           createdAt: true, updatedAt: true,
           fbPageId: true, logoUrl: true,
           qpayMerchantId: true, qpayAccountNumber: true, qpayBankCode: true,
-          // telegramBotToken — credential тул админ хариунд буцаахгүй (ботоор мессеж илгээх боломжтой)
-          telegramChatId: true,
         },
       }),
       prisma.turuuChat.count({ where: { orgId } }),
@@ -641,7 +639,6 @@ router.get("/health/detailed", async (req, res) => {
   }
 
   result.supabase = process.env.SUPABASE_URL ? "configured" : "not_configured";
-  result.telegram = process.env.TELEGRAM_BOT_TOKEN ? "configured" : "not_configured";
   result.facebook = process.env.FB_PAGE_ACCESS_TOKEN ? "configured" : "not_configured";
   result.resend = process.env.RESEND_API_KEY ? "configured" : "not_configured";
 

@@ -16,6 +16,9 @@ model Organization {
   fbPageId           String?  @unique
   fbPageToken        String?
   instagramAccountId String?
+  // DEPRECATED — Telegram интеграцыг 2026-07-д бүрэн хассан (мэдэгдэл и-мэйлээр явна).
+  // Багануудыг DROP хийгээгүй: production дээр ALTER DROP эргэшгүй тул хоосон үлдээв.
+  // Шинэ код эдгээрийг УНШИХГҮЙ, БИЧИХГҮЙ.
   telegramBotToken   String?
   telegramChatId     String?
   logoUrl            String?
