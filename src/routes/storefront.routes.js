@@ -9,6 +9,7 @@ const cache = require("../lib/cache");
 const checkoutLimiter = rateLimit({ windowMs: 60_000, max: 12 }); // checkout spam-аас
 const discountLimiter = rateLimit({ windowMs: 60_000, max: 6 }); // купон код brute-force/enumeration-аас
 const reviewLimiter = rateLimit({ windowMs: 60_000, max: 6 }); // сэтгэгдэл спам-аас
+const contactLimiter = rateLimit({ windowMs: 60_000, max: 5 }); // холбоо барих формын спам-аас
 
 const router = express.Router();
 
@@ -354,6 +355,43 @@ router.post("/:slug/reviews", reviewLimiter, async (req, res) => {
       select: { id: true, customerName: true, rating: true, comment: true, createdAt: true },
     });
     res.json({ review });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /storefront/:slug/contact — дэлгүүрийн "Холбоо барих" формыг хүлээж авна.
+// Өмнө нь энэ форм зөвхөн frontend-д "Баярлалаа, холбогдоно" гэж харуулаад мэдээллийг
+// ХАЯДАГ байсан (хаана ч илгээгддэггүй) — үйлчлүүлэгч хариу хүлээж, мерчант нь тэр
+// хүн байсныг ч мэддэггүй байв. Одоо Lead болж бүртгэгдэж, эзэнд и-мэйл очно.
+router.post("/:slug/contact", contactLimiter, async (req, res) => {
+  try {
+    const { name, contact, message } = req.body || {};
+    if (!name || !contact) return res.status(400).json({ error: "Нэр болон холбоо барих мэдээлэл шаардлагатай" });
+
+    const prisma = getPrisma();
+    const store = await prisma.store.findUnique({
+      where: { slug: String(req.params.slug).toLowerCase() },
+      select: { id: true, orgId: true, name: true, status: true },
+    });
+    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+
+    // contact талбар нь утас эсвэл и-мэйл байж болно — @ агуулсан бол и-мэйл гэж үзнэ
+    const c = String(contact).slice(0, 160);
+    const isEmail = c.includes("@");
+
+    const { saveLead } = require("../services/lead.service");
+    await saveLead({
+      psid: null,
+      orgId: store.orgId,
+      name: String(name).slice(0, 120),
+      phone: isEmail ? null : c,
+      email: isEmail ? c : null,
+      company: null,
+      serviceInterest: `Вэбсайт: ${store.name}`,
+      budget: null,
+      notes: message ? String(message).slice(0, 1000) : null,
+    });
+
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 

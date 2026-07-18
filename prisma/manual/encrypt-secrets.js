@@ -5,14 +5,13 @@
 //
 // Идемпотент: аль хэдийн шифрлэгдсэн (enc:v1: угтвартай) утгыг алгасна.
 // Энэ нь зөвхөн ӨГӨГДЛИЙГ шифрлэнэ. Кодын уншилтын зам бүрт decrypt холбосон байх ёстой
-// (телеграм нь telegram.service-д төвлөрсөн; fbPageToken/qpay-г уншдаг газруудад
 //  require("../lib/secretCrypto").decrypt(...)-ийг нэмнэ). Холболтыг хийгээгүй бол БҮҮ ажиллуул.
 
 require("dotenv").config();
 const { PrismaClient } = require("@prisma/client");
 const { encrypt, isEnabled, PREFIX } = require("../../src/lib/secretCrypto");
 
-const FIELDS = ["fbPageToken", "telegramBotToken", "telegramChatId", "qpayMerchantId", "qpayAccountNumber", "qpayAccountName"];
+const FIELDS = ["fbPageToken", "qpayMerchantId", "qpayAccountNumber", "qpayAccountName"];
 
 (async () => {
   if (!isEnabled()) { console.error("ENCRYPTION_KEY тохируулаагүй — зогсоов."); process.exit(1); }

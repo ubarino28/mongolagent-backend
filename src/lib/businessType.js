@@ -13,7 +13,7 @@ const LABELS = {
     empty:           "Эмч байхгүй",
     select:          "Эмч сонгоно уу",
     selectHint:      "Зүүн талаас эмч дарж цагийн хуваарийг харна уу",
-    telegramKey:     "Эмч",
+    staffLabel:      "Эмч",
     appointment:     "Үзлэгийн цаг",
   },
   restaurant: {
@@ -28,7 +28,7 @@ const LABELS = {
     empty:           "Тогооч байхгүй",
     select:          "Тогооч сонгоно уу",
     selectHint:      "Зүүн талаас тогооч дарж цагийн хуваарийг харна уу",
-    telegramKey:     "Тогооч",
+    staffLabel:      "Тогооч",
     appointment:     "Ширээ захиалга",
   },
   service: {
@@ -43,7 +43,7 @@ const LABELS = {
     empty:           "Ажилтан байхгүй",
     select:          "Ажилтан сонгоно уу",
     selectHint:      "Зүүн талаас ажилтан дарж цагийн хуваарийг харна уу",
-    telegramKey:     "Ажилтан",
+    staffLabel:      "Ажилтан",
     appointment:     "Цаг захиалга",
   },
 };
@@ -60,7 +60,7 @@ const DEFAULT = {
   empty:           "Мастер байхгүй",
   select:          "Мастер сонгоно уу",
   selectHint:      "Зүүн талаас мастер дарж цагийн хуваарийг харна уу",
-  telegramKey:     "Мастер",
+  staffLabel:      "Мастер",
   appointment:     "Цагийн захиалга",
 };
 

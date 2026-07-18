@@ -2,7 +2,6 @@
 const OpenAI = require("openai");
 const { buildSystemPrompt } = require("../lib/prompt");
 const cache = require("../lib/cache");
-const { decrypt } = require("../lib/secretCrypto");
 
 // System prompt-ийг 60с кэшилнэ — мессеж бүрт turuuSettings-ийг DB-ээс уншихаас сэргийлнэ
 // (өндөр ачаалалд DB query огцом буурна). Тохиргоо засагдвал invalidatePrompt-оор цэвэрлэнэ.
@@ -97,7 +96,7 @@ async function incrementMessageUsed(orgId, _prisma) {
   await incrementMessageUsedBy(orgId, 1);
 }
 
-// Квотын мэдэгдлийг эзэн рүү Telegram-аар илгээнэ — сард НЭГ Л УДАА (level тус бүр).
+// Квотын мэдэгдлийг эзний и-мэйл рүү илгээнэ — сард НЭГ Л УДАА (level тус бүр).
 // Fire-and-forget: await хийхгүй тул хэрэглэгчид хариу өгөх latency-д нөлөөлөхгүй.
 function notifyQuotaOwner(orgId, level) {
   if (!orgId) return;
@@ -105,11 +104,14 @@ function notifyQuotaOwner(orgId, level) {
     try {
       const { markQuotaNotice } = require("../lib/quota");
       if (!(await markQuotaNotice(orgId, level))) return; // энэ сард аль хэдийн илгээсэн → давтахгүй
-      const telegram = require("./telegram.service");
-      const text = level === "exhausted"
-        ? "🔴 Мессежийн эрх дууслаа — AI бот түр зогслоо.\nНэмэлт message авах эсвэл план ахиулж сэргээнэ үү.\n→ Тохиргоо · Төлбөр & Тариф"
-        : "⚠️ Мессежийн эрх 90% хүрлээ.\nДуусвал AI бот зогсоно. Нэмэлт message авах эсвэл план ахиулахыг зөвлөж байна.\n→ Тохиргоо · Төлбөр & Тариф";
-      await telegram.notifyText(orgId, text);
+      const { notifyOwner } = require("./notify.service");
+      const rows = level === "exhausted"
+        ? { Төлөв: "Мессежийн эрх дууслаа — AI бот түр зогслоо",
+            "Хийх үйлдэл": "Нэмэлт message авах эсвэл план ахиулж сэргээнэ үү" }
+        : { Төлөв: "Мессежийн эрх 90% хүрлээ",
+            "Хийх үйлдэл": "Дуусвал AI бот зогсоно. Нэмэлт message авах эсвэл план ахиулахыг зөвлөж байна" };
+      await notifyOwner(orgId, level === "exhausted" ? "Мессежийн эрх дууслаа" : "Мессежийн эрх дуусах дөхлөө",
+        rows, { label: "Төлбөр & Тариф", path: "/settings/billing" });
     } catch { /* мэдэгдэл амжилтгүй бол чимээгүй өнгөрнө */ }
   })();
 }
@@ -350,7 +352,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
       // Хэрэглэгч нэмэлт message багц (top-up) авах эсвэл дээд план руу upgrade хийж нээнэ.
       if (used >= effectiveQuota) {
         console.warn(`[ai] org ${orgId} quota exhausted (used=${used}, quota=${effectiveQuota}) — AI хариу зогсоов`);
-        notifyQuotaOwner(orgId, "exhausted");            // эзэнд Telegram-аар мэдэгдэнэ (сард нэг удаа)
+        notifyQuotaOwner(orgId, "exhausted");            // эзэнд и-мэйлээр мэдэгдэнэ (сард нэг удаа)
         return null;
       }
       const pct = Math.round((used / effectiveQuota) * 100);
@@ -747,22 +749,15 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
           } else {
             await prisma.turuuOrder.update({ where: { id: order.id }, data: { status: "PAYMENT_SENT" } });
             const orderCode = order.id.slice(-6).toUpperCase();
-            // Telegram мэдэгдэл (бэлэн код, telegram холбогдсон үед ажиллана)
-            if (orgId) {
-              try {
-                const org = await prisma.organization.findUnique({
-                  where: { id: orgId },
-                  select: { telegramBotToken: true, telegramChatId: true },
-                });
-                const botToken = decrypt(org?.telegramBotToken) || process.env.TELEGRAM_BOT_TOKEN;
-                const chatId = decrypt(org?.telegramChatId) || process.env.TELEGRAM_CHAT_ID;
-                if (botToken && chatId) {
-                  const axios = require("axios");
-                  const text = `💳 Хэрэглэгч төлбөр шилжүүлснээ мэдэгдлээ!\nЗахиалга #${orderCode}\nДүн: ₮${Number(order.totalAmount || 0).toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}\n${args.notes ? `Тайлбар: ${args.notes}` : ""}\nDashboard-аас шалгаж баталгаажуулна уу!`;
-                  await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
-                }
-              } catch { /* non-blocking */ }
-            }
+            // Эзэн рүү и-мэйл мэдэгдэл — dashboard-аас баталгаажуулах шаардлагатай
+            const { notifyOwner } = require("./notify.service");
+            notifyOwner(orgId, "Хэрэглэгч төлбөр шилжүүлснээ мэдэгдлээ", {
+              Захиалга: `#${orderCode}`,
+              Дүн: `₮${Number(order.totalAmount || 0).toLocaleString()}`,
+              Хэрэглэгч: order.customerName || "—",
+              Тайлбар: args.notes,
+              "Хийх үйлдэл": "Dashboard-аас шалгаж баталгаажуулна уу",
+            }, { label: "Захиалга шалгах", path: "/orders" }).catch(() => {});
             toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ success: true, orderCode }) });
           }
         } catch (e) {
@@ -939,24 +934,19 @@ async function processReceiptImage(psid, imageUrl, orgId = null) {
     replyText = `📸 Баримтыг хүлээн авлаа! Манай ажилтан шалгаж баталгаажуулна, түр хүлээнэ үү 🙏`;
   }
 
-  // Admin-д Telegram мэдэгдэл — дансаар бол ҮРГЭЛЖ явуулна (QPay flow-той адил pattern)
-  if (orgId) {
-    try {
-      const org = await prisma.organization.findUnique({
-        where: { id: orgId },
-        select: { telegramBotToken: true, telegramChatId: true },
-      });
-      const botToken = decrypt(org?.telegramBotToken) || process.env.TELEGRAM_BOT_TOKEN;
-      const chatId = decrypt(org?.telegramChatId) || process.env.TELEGRAM_CHAT_ID;
-      if (botToken && chatId) {
-        const axios = require("axios");
-        const statusLine = amountMatches
-          ? "📥 Дансаар баримт ирлээ — дүн тохирч байна, БАТАЛГААЖУУЛНА УУ"
-          : `⚠️ Дансаар баримт ирлээ — дүн зөрүүтэй/танигдсангүй (танигдсан дүн: ${extractedAmount ? extractedAmount.toLocaleString() + "₮" : "тодорхойгүй"}), шалгана уу`;
-        const text = `${statusLine}\nЗахиалга #${orderCode}\nДүн: ₮${expected.toLocaleString()}\nХэрэглэгч: ${order.customerName || "—"}\nБаримт: ${imageUrl}`;
-        await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text }).catch(() => {});
-      }
-    } catch { /* non-blocking */ }
+  // Эзэн рүү и-мэйл мэдэгдэл — дансаар бол ҮРГЭЛЖ явуулна (QPay flow-той адил pattern)
+  {
+    const { notifyOwner } = require("./notify.service");
+    const statusLine = amountMatches
+      ? "Дансаар баримт ирлээ — дүн тохирч байна, БАТАЛГААЖУУЛНА УУ"
+      : `Дансаар баримт ирлээ — дүн зөрүүтэй/танигдсангүй (танигдсан дүн: ${extractedAmount ? extractedAmount.toLocaleString() + "₮" : "тодорхойгүй"}), шалгана уу`;
+    notifyOwner(orgId, "Төлбөрийн баримт ирлээ", {
+      Төлөв: statusLine,
+      Захиалга: `#${orderCode}`,
+      Дүн: `₮${expected.toLocaleString()}`,
+      Хэрэглэгч: order.customerName || "—",
+      Баримт: imageUrl,
+    }, { label: "Захиалга шалгах", path: "/orders" }).catch(() => {});
   }
 
   const history = await getHistory(psid, orgId);

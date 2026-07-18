@@ -13,7 +13,7 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
 
 const express = require("express");
 const cors = require("cors");
-// Бүх axios дуудлагад глобал timeout (QPay/Facebook/Telegram/Vercel) — гадны API удааширвал
+// Бүх axios дуудлагад глобал timeout (QPay/Facebook/Vercel) — гадны API удааширвал
 // хүсэлт хязгааргүй гацахаас сэргийлнэ (axios-ийн анхдагч = timeout байхгүй).
 require("axios").defaults.timeout = 20000;
 const webhookRouter = require("./routes/webhook.routes");
@@ -141,6 +141,21 @@ const { getPrisma } = require("./lib/db");
       )
     `);
     await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "ReportSnapshot_orgId_idx" ON "ReportSnapshot"("orgId")`);
+    // Өгөгдөл устгах хүсэлтийн бүртгэл — Facebook-ийн Data Deletion Callback-д
+    // ЗААВАЛ шаардлагатай (хэрэглэгч кодоор явцаа шалгана). Мөн бид хүсэлт бүрийг
+    // баримтжуулснаар "устгасан" гэдгээ нотлох боломжтой болно.
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "DataDeletionRequest" (
+        "id" TEXT PRIMARY KEY,
+        "code" TEXT UNIQUE NOT NULL,
+        "source" TEXT NOT NULL,
+        "subjectRef" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'pending',
+        "result" JSONB,
+        "createdAt" TIMESTAMPTZ DEFAULT now(),
+        "completedAt" TIMESTAMPTZ
+      )
+    `);
     // Композит index — захиалгын жагсаалт/тайлангийн гол хайлт (orgId+status+createdAt).
     // Хүснэгт одоо жижиг тул энгийн CREATE INDEX шууд ажиллана (түгжээ мэдэгдэхгүй).
     // (CONCURRENTLY нь Prisma-гийн raw query дотор ажиллахгүй; аль хэдийн асар том
@@ -219,6 +234,9 @@ app.use("/store", storeRouter);
 app.use("/storefront", cors({ origin: true }), storefrontRouter);
 // Тайлан баталгаажуулалт — НИЙТИЙН (auth-гүй). Банк код/URL-ээр орж жинхэнэ тоог шалгана.
 app.use("/verify", cors({ origin: true }), require("./routes/verify.routes"));
+// Нууцлал — НИЙТИЙН. Facebook-ийн Data Deletion Callback болон устгалын статусын хуудас.
+// Meta серверээс дуудагдана (origin-гүй) тул бүх origin зөвшөөрнө.
+app.use("/privacy", cors({ origin: true }), require("./routes/privacy.routes"));
 
 // Сүүлчийн алдаа баригч — Sentry-д илгээж, цэвэр 500 буцаана
 // eslint-disable-next-line no-unused-vars

@@ -2192,6 +2192,34 @@ router.put("/profile/password", requireOwner, async (req, res) => {
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
+// DELETE /client/account — бүртгэл болон холбогдох БҮХ мэдээллийг бүрмөсөн устгана.
+// Нууцлалын бодлогод "устгуулах эрхтэй" гэж бичсэн тул энэ нь ажиллаж байх ЁСТОЙ.
+// Хамгаалалт: зөвхөн эзэн, нууц үг + и-мэйлээ бичиж баталгаажуулна (санамсаргүй
+// дарж устгахаас сэргийлнэ). Үйлдэл ЭРГЭШГҮЙ.
+router.delete("/account", requireOwner, async (req, res) => {
+  try {
+    const { password, confirmEmail } = req.body || {};
+    if (!password || !confirmEmail) {
+      return res.status(400).json({ error: "password болон confirmEmail шаардлагатай" });
+    }
+    const bcrypt = require("bcryptjs");
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({ where: { id: req.org.orgId } });
+    if (!org) return res.status(404).json({ error: "Байгууллага олдсонгүй" });
+
+    const valid = await bcrypt.compare(password, org.passwordHash);
+    if (!valid) return res.status(400).json({ error: "Нууц үг буруу байна" });
+    if (String(confirmEmail).trim().toLowerCase() !== String(org.email).toLowerCase()) {
+      return res.status(400).json({ error: "И-мэйл таарахгүй байна" });
+    }
+
+    const { eraseOrganization } = require("../services/privacy.service");
+    const removed = await eraseOrganization(prisma, req.org.orgId);
+    console.log(`[privacy] Org ${req.org.orgId} бүрмөсөн устгав`, removed);
+    res.json({ ok: true, removed });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
 // ─── BILLING ─────────────────────────────────────────────────────────────────
 
 // GET /client/billing
@@ -2204,9 +2232,9 @@ router.get("/billing", async (req, res) => {
     });
     const quota = PLAN_QUOTA[org.plan] || 10000;
     const PLANS = {
-      starter:    { name: "Starter",    price: 59900,  quota: 2300,  features: ["2,300 мессеж/сар", "Facebook Messenger AI", "Builder AI", "Мэдлэгийн сан (100)", "Lead цуглуулах", "Telegram мэдэгдэл"] },
+      starter:    { name: "Starter",    price: 59900,  quota: 2300,  features: ["2,300 мессеж/сар", "Facebook Messenger AI", "Builder AI", "Мэдлэгийн сан (100)", "Lead цуглуулах", "И-мэйл мэдэгдэл"] },
       growth:     { name: "Growth",     price: 99900,  quota: 3800,  features: ["3,800 мессеж/сар", "Мэдлэгийн сан (500)", "Захиалга + QPay төлбөр", "Цаг захиалга + урьдчилгаа", "Instagram DM", "Хүн handoff", "Автомат comment", "PDF/Excel → Мэдлэгийн сан", "Funnel analytics"] },
-      business:   { name: "Business",   price: 179900, quota: 6900,  features: ["6,900 мессеж/сар", "Custom keyword → DM", "AI тохиргоо (model/tone)", "Мэдлэгийн сан (2,000)", "Priority Telegram дэмжлэг", "Дэвшилтэт analytics"] },
+      business:   { name: "Business",   price: 179900, quota: 6900,  features: ["6,900 мессеж/сар", "Custom keyword → DM", "AI тохиргоо (model/tone)", "Мэдлэгийн сан (2,000)", "Priority дэмжлэг", "Дэвшилтэт analytics"] },
       enterprise: { name: "Enterprise", price: 349900, quota: 13500, features: ["13,500 мессеж/сар", "Custom AI Chatbot", "Custom AI Agent", "Custom Website", "White label", "Олон хуудас + API"] },
     };
     // Хугацаа бүрийн үнэ (сар/6сар/жил) нэмнэ — frontend toggle-д ашиглана
@@ -2765,7 +2793,7 @@ router.get("/profile", async (req, res) => {
     const [org, btSetting] = await Promise.all([
       prisma.organization.findUnique({
         where: { id: req.org.orgId },
-        select: { id: true, name: true, slug: true, email: true, plan: true, status: true, logoUrl: true, fbPageId: true, fbPageToken: true, telegramBotToken: true, telegramChatId: true, createdAt: true },
+        select: { id: true, name: true, slug: true, email: true, plan: true, status: true, logoUrl: true, fbPageId: true, fbPageToken: true, createdAt: true },
       }),
       prisma.turuuSettings.findUnique({
         where: { orgId_key: { orgId: req.org.orgId, key: "business_type" } },
@@ -2819,19 +2847,6 @@ router.put("/profile/facebook", requireOwner, async (req, res) => {
     await prisma.organization.update({
       where: { id: req.org.orgId },
       data: { fbPageId, fbPageToken },
-    });
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
-});
-
-// PUT /client/profile/telegram
-router.put("/profile/telegram", requireOwner, async (req, res) => {
-  try {
-    const { telegramBotToken, telegramChatId } = req.body;
-    const prisma = getPrisma();
-    await prisma.organization.update({
-      where: { id: req.org.orgId },
-      data: { telegramBotToken: telegramBotToken ? encrypt(telegramBotToken) : null, telegramChatId: telegramChatId ? encrypt(telegramChatId) : null },
     });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }

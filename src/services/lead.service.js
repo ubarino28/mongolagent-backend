@@ -1,7 +1,6 @@
 "use strict";
 const { getPrisma } = require("../lib/db");
-const axios = require("axios");
-const { decrypt } = require("../lib/secretCrypto");
+const { notifyOwner } = require("./notify.service");
 
 // AI tool-аас ирэх мөрийг хязгаарлана — урт payload-оор DB bloat хийхээс сэргийлнэ
 const C = (s, n = 200) => (typeof s === "string" ? s.slice(0, n) : s);
@@ -12,9 +11,11 @@ async function saveLead({ psid, orgId = null, name, phone, email, company, servi
     data: { psid, orgId, name: C(name, 120), phone: C(phone, 32), email: C(email, 160), company: C(company, 160), serviceInterest: C(serviceInterest, 200), budget: C(budget, 80), notes: C(notes, 1000) },
   });
 
-  // Telegram мэдэгдэл — org-ийн token эсвэл глобал token ашиглана
-  const { botToken, chatId } = await getTelegramConfig(orgId);
-  await notifyTelegram("💼 Шинэ Lead", { name, phone, email, company, serviceInterest, budget, notes }, botToken, chatId);
+  // Мэдэгдэл — байгууллагын и-мэйл рүү (туслах урсгал, унавал захиалгад нөлөөлөхгүй)
+  await notifyOwner(orgId, "Шинэ Lead", {
+    Нэр: name, Утас: phone, "И-мэйл": email, Байгууллага: company,
+    Сонирхол: serviceInterest, Төсөв: budget, Тэмдэглэл: notes,
+  }, { label: "Lead-үүдээ харах", path: "/leads" });
   return lead;
 }
 
@@ -24,30 +25,11 @@ async function saveConsultation({ psid, orgId = null, name, phone, email, servic
     data: { psid, orgId, name: C(name, 120), phone: C(phone, 32), email: C(email, 160), serviceInterest: C(serviceInterest, 200), preferredTime: C(preferredTime, 120) },
   });
 
-  const { botToken, chatId } = await getTelegramConfig(orgId);
-  await notifyTelegram("📅 Consultation захиалга", { name, phone, email, serviceInterest, preferredTime }, botToken, chatId);
+  await notifyOwner(orgId, "Consultation захиалга", {
+    Нэр: name, Утас: phone, "И-мэйл": email,
+    Сонирхол: serviceInterest, "Тохирох цаг": preferredTime,
+  }, { label: "Дэлгэрэнгүй харах", path: "/leads" });
   return c;
-}
-
-async function getTelegramConfig(orgId) {
-  try {
-    if (orgId) {
-      const prisma = getPrisma();
-      const org = await prisma.organization.findUnique({ where: { id: orgId } });
-      if (org?.telegramBotToken && org?.telegramChatId) {
-        return { botToken: decrypt(org.telegramBotToken), chatId: decrypt(org.telegramChatId) };
-      }
-    }
-  } catch { /* fallback */ }
-  return { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID };
-}
-
-async function notifyTelegram(title, data, botToken, chatId) {
-  if (!botToken || !chatId) return;
-  const lines = Object.entries(data).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("\n");
-  const text = `${title}\n━━━━━━━━━━━━\n${lines}`;
-  await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, { chat_id: chatId, text })
-    .catch((err) => console.error("[TG] notify error:", err.message));
 }
 
 async function saveOrder({ psid, orgId = null, customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes, payOnPickup = false }) {
@@ -75,7 +57,7 @@ async function saveOrder({ psid, orgId = null, customerName, customerPhone, cust
     throw new Error("Захиалгын нийт дүн 0 байна. Барааны үнийг эхлээд тодруулна уу (search_knowledge/check_menu-ээр) дараа нь захиалгыг бүртгэнэ.");
   }
 
-  // Очиж авахдаа төлнө — notes-д тэмдэглэж эзэнд (dashboard + Telegram) харагдуулна
+  // Очиж авахдаа төлнө — notes-д тэмдэглэж эзэнд (dashboard + и-мэйл) харагдуулна
   if (payOnPickup) {
     const suffix = "Очиж авахдаа төлнө";
     notes = notes ? `${notes} | ${suffix}` : suffix;
@@ -96,12 +78,14 @@ async function saveOrder({ psid, orgId = null, customerName, customerPhone, cust
     data: { psid, orgId, customerName: C(customerName, 120), customerPhone: C(customerPhone, 32), customerEmail: C(customerEmail, 160), deliveryAddress: C(deliveryAddress, 400), items, totalAmount, notes: C(notes, 1000) },
   });
 
-  const { botToken, chatId } = await getTelegramConfig(orgId);
   const itemsSummary = Array.isArray(items) ? items.map((i) => {
     const variant = [i.color, i.size].filter(Boolean).join(" / ");
     return `${i.name}${variant ? ` (${variant})` : ""} x${i.qty} — ₮${(i.price * i.qty).toLocaleString()}`;
   }).join("\n") : "";
-  await notifyTelegram("🛒 Шинэ захиалга", { customerName, customerPhone, deliveryAddress, items: itemsSummary, totalAmount: `₮${totalAmount?.toLocaleString()}`, notes }, botToken, chatId);
+  await notifyOwner(orgId, "Шинэ захиалга", {
+    Хэрэглэгч: customerName, Утас: customerPhone, Хаяг: deliveryAddress,
+    Бараа: itemsSummary, "Нийт дүн": `₮${totalAmount?.toLocaleString()}`, Тэмдэглэл: notes,
+  }, { label: "Захиалгаа харах", path: "/orders" });
   return order;
 }
 
@@ -156,14 +140,14 @@ async function saveAppointment({ psid, orgId = null, staffId, staffName, service
     }
   }
 
-  const { botToken, chatId } = await getTelegramConfig(orgId);
+  // Бизнесийн төрлөөс хамаарсан шошго (Эмч / Тогооч / Мастер ...)
   let staffKeyLabel = "Мастер";
   try {
     const bt = await prisma.turuuSettings.findUnique({ where: { orgId_key: { orgId, key: "business_type" } } });
     const { getLabels } = require("../lib/businessType");
-    staffKeyLabel = getLabels(bt?.value).telegramKey;
+    staffKeyLabel = getLabels(bt?.value).staffLabel;
   } catch { /* fallback */ }
-  await notifyTelegram("📅 Шинэ цаг захиалга", {
+  await notifyOwner(orgId, "Шинэ цаг захиалга", {
     [staffKeyLabel]: staffName || staffId,
     Үйлчилгээ:   serviceName,
     Огноо:       `${date} ${timeSlot}`,
@@ -171,7 +155,7 @@ async function saveAppointment({ psid, orgId = null, staffId, staffName, service
     Утас:         customerPhone,
     Урьдчилгаа:  depositAmount > 0 ? `₮${depositAmount.toLocaleString()}` : undefined,
     Тэмдэглэл:   notes,
-  }, botToken, chatId);
+  }, { label: "Цагийн захиалга харах", path: "/appointments" });
 
   return { ...appt, qpayData };
 }
