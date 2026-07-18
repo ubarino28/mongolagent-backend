@@ -1,17 +1,17 @@
 "use strict";
 const { getPrisma } = require("./db");
 
-// ─── DEFAULT (Türüü AI өөрийн chatbot) ───────────────────────────────────────
+// ─── DEFAULT (Mongol Agent өөрийн chatbot) ───────────────────────────────────────
 
 function getDefaultBody() {
-  return `Чи Түрүү AI компанийн AI зөвлөх Аги.
+  return `Чи Mongol Agent компанийн AI зөвлөх Аги.
 Монголын бизнесүүдэд AI шийдэл нэвтрүүлэхэд тусалдаг мэргэжлийн, найрсаг туслах.
 Онцлог: шийдвэр гаргахад тусладаг, тодорхой, итгэлтэй. Emoji хэрэглэж болно 😊
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 КОМПАНИ
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-Нэр: Түрүү AI
+Нэр: Mongol Agent
 Чиглэл: AI chatbot, автоматжуулалт, сургалт, зөвлөгөө
 Зорилт: Монголын бизнесүүдийг AI-аар хүчирхэгжүүлэх
 
@@ -456,10 +456,10 @@ async function buildSystemPrompt(isNew, orgId = null, hasImage = false) {
 
   // Body сонгох:
   //  • Profile тохируулсан бол → түүнийг ашиглана
-  //  • Tenant (orgId) боловч profile тохируулаагүй бол → Түрүү AI-гийн зар руу УНАХГҮЙ.
+  //  • Tenant (orgId) боловч profile тохируулаагүй бол → Mongol Agent-ийн зар руу УНАХГҮЙ.
   //    Бизнесийн нэр дээр суурилсан нейтрал prompt үүсгэж, бүх мэдээллийг search_knowledge-аас авна
   //    (business_type байвал захиалга/цаг захиалгын урсгал автоматаар нэмэгдэнэ)
-  //  • orgId огт байхгүй бол → Түрүү AI өөрийн маркетинг бот (getDefaultBody)
+  //  • orgId огт байхгүй бол → Mongol Agent өөрийн маркетинг бот (getDefaultBody)
   let body;
   if (bodyPrompt) {
     body = bodyPrompt;

@@ -2192,6 +2192,34 @@ router.put("/profile/password", requireOwner, async (req, res) => {
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
+// DELETE /client/account — бүртгэл болон холбогдох БҮХ мэдээллийг бүрмөсөн устгана.
+// Нууцлалын бодлогод "устгуулах эрхтэй" гэж бичсэн тул энэ нь ажиллаж байх ЁСТОЙ.
+// Хамгаалалт: зөвхөн эзэн, нууц үг + и-мэйлээ бичиж баталгаажуулна (санамсаргүй
+// дарж устгахаас сэргийлнэ). Үйлдэл ЭРГЭШГҮЙ.
+router.delete("/account", requireOwner, async (req, res) => {
+  try {
+    const { password, confirmEmail } = req.body || {};
+    if (!password || !confirmEmail) {
+      return res.status(400).json({ error: "password болон confirmEmail шаардлагатай" });
+    }
+    const bcrypt = require("bcryptjs");
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({ where: { id: req.org.orgId } });
+    if (!org) return res.status(404).json({ error: "Байгууллага олдсонгүй" });
+
+    const valid = await bcrypt.compare(password, org.passwordHash);
+    if (!valid) return res.status(400).json({ error: "Нууц үг буруу байна" });
+    if (String(confirmEmail).trim().toLowerCase() !== String(org.email).toLowerCase()) {
+      return res.status(400).json({ error: "И-мэйл таарахгүй байна" });
+    }
+
+    const { eraseOrganization } = require("../services/privacy.service");
+    const removed = await eraseOrganization(prisma, req.org.orgId);
+    console.log(`[privacy] Org ${req.org.orgId} бүрмөсөн устгав`, removed);
+    res.json({ ok: true, removed });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
 // ─── BILLING ─────────────────────────────────────────────────────────────────
 
 // GET /client/billing

@@ -1,7 +1,7 @@
 {
   "name": "mongolagent-backend",
   "version": "1.0.0",
-  "description": "Түрүү AI — Facebook Messenger AI Chatbot Backend",
+  "description": "Mongol Agent — Facebook Messenger AI Chatbot Backend",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
