@@ -2231,18 +2231,10 @@ router.get("/affiliate", async (req, res) => {
     const code = await affiliate.ensureReferralCode(prisma, orgId);
     const balance = await affiliate.getBalance(prisma, orgId);
     const clientCount = await prisma.organization.count({ where: { referredBy: orgId } });
-    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { payoutBank: true, referredBy: true, referredAt: true } });
-    // Намайг хэн нэгэн урьсан эсэх, мөн урих код нэмж болох эсэх (төлбөрийн өмнө л).
-    const hasReferrer = !!org?.referredBy;
-    let canSetReferral = false;
-    if (!hasReferrer && !org?.referredAt) {
-      const paidBefore = await prisma.auditLog.count({ where: { orgId, action: "subscription.paid" } });
-      canSetReferral = paidBefore === 0;
-    }
+    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { payoutBank: true } });
     res.json({
       code, balance, clientCount, payoutBank: org?.payoutBank || null,
       rate: affiliate.COMMISSION_RATE, months: affiliate.COMMISSION_MONTHS, minWithdraw: affiliate.MIN_WITHDRAW,
-      referral: { hasReferrer, canSetReferral },
     });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
@@ -2359,6 +2351,24 @@ router.get("/affiliate/payouts", async (req, res) => {
       orderBy: { createdAt: "desc" }, take: 100,
     });
     res.json({ payouts });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// GET /client/affiliate/referral-status — намайг хэн нэгэн урьсан эсэх, код нэмж
+// болох эсэх (төлбөрийн өмнө л). Register/Төлбөр хуудсанд урих код оруулах хэсгийг
+// харуулах эсэхийг шийдэхэд ашиглана. (GET /affiliate шиг код үүсгэхгүй — хөнгөн.)
+router.get("/affiliate/referral-status", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { referredBy: true, referredAt: true } });
+    const hasReferrer = !!org?.referredBy;
+    let canSetReferral = false;
+    if (!hasReferrer && !org?.referredAt) {
+      const paidBefore = await prisma.auditLog.count({ where: { orgId, action: "subscription.paid" } });
+      canSetReferral = paidBefore === 0;
+    }
+    res.json({ hasReferrer, canSetReferral });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
