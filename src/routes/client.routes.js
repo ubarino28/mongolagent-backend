@@ -135,6 +135,9 @@ router.get("/profile/facebook/auth-url", requireOwner, (req, res) => {
     "pages_messaging",
     "pages_show_list",
     "pages_manage_metadata",
+    "pages_read_engagement",      // хуудасны пост/engagement унших (пост тайлан)
+    "instagram_basic",            // холбогдсон IG account унших
+    "instagram_manage_messages",  // Instagram DM хариулах
   ].join(",");
 
   const url = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FB_APP_ID}&redirect_uri=${encodeURIComponent(FB_CALLBACK)}&scope=${scope}&state=${state}`;
@@ -173,6 +176,31 @@ router.post("/profile/facebook/select-page", requireOwner, async (req, res) => {
     });
     res.json({ ok: true, pageName });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// GET /client/facebook/posts — холбогдсон хуудасны сүүлийн постууд + engagement тайлан.
+// pages_read_engagement эрхээр ажиллана. 5 минут кэшлэнэ (Graph API-г хэт олон дуудахгүй).
+router.get("/facebook/posts", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({
+      where: { id: req.org.orgId }, select: { fbPageId: true, fbPageToken: true },
+    });
+    if (!org?.fbPageId || !org?.fbPageToken) {
+      return res.json({ connected: false, posts: [], summary: null });
+    }
+    const { fetchPagePosts } = require("../services/facebookInsights.service");
+    const data = await cache.getOrSet(`fbposts:${req.org.orgId}`, 5 * 60_000, async () => {
+      const token = decrypt(org.fbPageToken) || process.env.FB_PAGE_ACCESS_TOKEN;
+      return fetchPagePosts(org.fbPageId, token, 25);
+    });
+    res.json({ connected: true, ...data });
+  } catch (e) {
+    // Graph API алдаа (токен хүчингүй, эрх хүрэлцэхгүй г.м) — цэвэр мессеж буцаана
+    const fbErr = e.response?.data?.error?.message;
+    console.error("[fb-posts]", fbErr || e.message);
+    res.status(502).json({ error: fbErr ? `Facebook: ${fbErr}` : "Постуудыг татахад алдаа гарлаа" });
+  }
 });
 
 // GET /client/stats
