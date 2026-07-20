@@ -24,10 +24,12 @@ if (!process.env.FB_APP_SECRET) {
 const { timingEqual } = require("../lib/timingEqual");
 
 // Facebook webhook-ийн X-Hub-Signature-256 (HMAC-SHA256) шалгана.
-// FB_APP_SECRET тохируулаагүй бол алгасна (амьд интеграцыг эвдэхгүй) — тохируулсан бол ШАХНА.
+// FB_APP_SECRET тохируулаагүй бол: production-д ТАТГАЛЗАНА (хуурамч webhook-оос сэргийлж),
+// dev/local-д алгасна (тестийг хялбар болгож). FB_APP_SECRET нь OAuth-д ч хэрэгтэй тул
+// production-д ямар ч байсан тохируулагдсан байх ёстой.
 function fbSignatureValid(req) {
   const appSecret = process.env.FB_APP_SECRET;
-  if (!appSecret) return true;
+  if (!appSecret) return process.env.NODE_ENV !== "production";
   const sig = req.get("x-hub-signature-256");
   if (!sig || !sig.startsWith("sha256=")) return false;
   const expected = "sha256=" + crypto.createHmac("sha256", appSecret)
@@ -67,23 +69,28 @@ router.post("/", (req, res) => {
   if (!fbSignatureValid(req)) return res.sendStatus(403);
 
   const body = req.body;
-  if (body.object !== "page") return res.sendStatus(404);
+  // Facebook Messenger (object="page") болон Instagram DM (object="instagram") хоёуланг хүлээж авна.
+  const isInstagram = body.object === "instagram";
+  if (body.object !== "page" && !isInstagram) return res.sendStatus(404);
 
   res.status(200).send("EVENT_RECEIVED");
 
   setImmediate(async () => {
     for (const entry of body.entry || []) {
-      // entry.id нь Facebook Page ID — аль org-ийнх болохыг мэднэ
-      const pageId = entry.id;
+      // Facebook: entry.id = Page ID. Instagram: entry.id = IG account ID.
+      // IG account нь Facebook Page-ээр дамжин холбогддог тул Page токеноор л мессеж илгээнэ.
+      const platformId = entry.id;
       let orgId = null;
       let pageToken = null;
 
       try {
         const prisma = getPrisma();
-        const org = await prisma.organization.findUnique({ where: { fbPageId: pageId } });
+        const org = isInstagram
+          ? await prisma.organization.findFirst({ where: { instagramAccountId: platformId } })
+          : await prisma.organization.findUnique({ where: { fbPageId: platformId } });
         if (org) {
           orgId = org.id;
-          pageToken = decrypt(org.fbPageToken);
+          pageToken = decrypt(org.fbPageToken); // IG-д ч Page токен ашиглана
         }
       } catch (err) {
         console.error("[webhook] org lookup error:", err.message);
