@@ -2246,7 +2246,7 @@ router.get("/affiliate/clients", async (req, res) => {
     const orgId = req.org.orgId;
     const clients = await prisma.organization.findMany({
       where: { referredBy: orgId },
-      select: { id: true, name: true, plan: true, status: true, subscriptionEndsAt: true, referredAt: true, createdAt: true },
+      select: { id: true, name: true, plan: true, status: true, subscriptionEndsAt: true, referredAt: true, subPerMonth: true, createdAt: true },
       orderBy: { createdAt: "desc" },
       take: 500,
     });
@@ -2256,15 +2256,57 @@ router.get("/affiliate/clients", async (req, res) => {
     });
     const byClient = Object.fromEntries(sums.map((s) => [s.clientId, { earned: s._sum.amount || 0, months: s._count._all }]));
     const now = Date.now();
+    const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
     res.json({
-      clients: clients.map((c) => ({
+      clients: clients.map((c) => {
+        const earnedMonths = byClient[c.id]?.months || 0;
+        // Комиссын 12 сарын цонхноос хэд өнгөрснийг тооцно (referredAt-аас хойш)
+        const elapsed = c.referredAt ? Math.min(12, Math.floor((now - new Date(c.referredAt).getTime()) / MONTH_MS)) : 0;
+        return {
+          id: c.id, name: c.name, plan: c.plan,
+          active: !!(c.status === "active" && c.subscriptionEndsAt && new Date(c.subscriptionEndsAt).getTime() > now),
+          paid: !!c.referredAt, // subscription төлсөн эсэх (referredAt = анхны төлбөр)
+          joinedAt: c.createdAt,
+          referredAt: c.referredAt,                 // комисс эхэлсэн огноо
+          subscriptionEndsAt: c.subscriptionEndsAt, // subscription дуусах огноо
+          monthlyCommission: Math.round((c.subPerMonth || 0) * affiliate.COMMISSION_RATE), // сард дунджаар
+          earned: byClient[c.id]?.earned || 0,
+          commissionMonths: earnedMonths,           // хэдэн сарын комисс бодогдсон
+          monthsRemaining: Math.max(0, 12 - earnedMonths), // үлдсэн (12-оос)
+          windowElapsed: elapsed,                   // 12 сарын цонхноос өнгөрсөн
+        };
+      }),
+    });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// GET /client/affiliate/clients/:id — нэг клиентийн дэлгэрэнгүй + сар бүрийн комиссын задаргаа
+router.get("/affiliate/clients/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    // Зөвхөн ӨӨРИЙН урьсан клиентийг л харна (өөр хүний клиент рүү хандахаас сэргийлнэ)
+    const c = await prisma.organization.findFirst({
+      where: { id: req.params.id, referredBy: orgId },
+      select: { id: true, name: true, plan: true, status: true, subscriptionEndsAt: true, referredAt: true, subPerMonth: true, createdAt: true },
+    });
+    if (!c) return res.status(404).json({ error: "Клиент олдсонгүй" });
+    const commissions = await prisma.affiliateCommission.findMany({
+      where: { affiliateId: orgId, clientId: c.id },
+      select: { monthIndex: true, amount: true, basisAmount: true, createdAt: true },
+      orderBy: { monthIndex: "asc" },
+    });
+    const now = Date.now();
+    res.json({
+      client: {
         id: c.id, name: c.name, plan: c.plan,
-        active: c.status === "active" && c.subscriptionEndsAt && new Date(c.subscriptionEndsAt).getTime() > now,
-        paid: !!c.referredAt, // subscription төлсөн эсэх (referredAt = анхны төлбөр)
-        joinedAt: c.createdAt,
-        earned: byClient[c.id]?.earned || 0,
-        commissionMonths: byClient[c.id]?.months || 0,
-      })),
+        active: !!(c.status === "active" && c.subscriptionEndsAt && new Date(c.subscriptionEndsAt).getTime() > now),
+        paid: !!c.referredAt,
+        joinedAt: c.createdAt, referredAt: c.referredAt, subscriptionEndsAt: c.subscriptionEndsAt,
+        monthlyCommission: Math.round((c.subPerMonth || 0) * affiliate.COMMISSION_RATE),
+        totalEarned: commissions.reduce((s, x) => s + x.amount, 0),
+      },
+      commissions, // [{ monthIndex, amount, basisAmount, createdAt }]
     });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
