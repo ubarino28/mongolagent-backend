@@ -156,6 +156,40 @@ const { getPrisma } = require("./lib/db");
         "completedAt" TIMESTAMPTZ
       )
     `);
+    // Affiliate (санал болгох) хөтөлбөр — багана + 2 хүснэгт
+    await prisma.$executeRawUnsafe(`ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "referralCode" TEXT`);
+    await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "Organization_referralCode_key" ON "Organization"("referralCode")`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "referredBy" TEXT`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "referredAt" TIMESTAMP`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "subPerMonth" INTEGER`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "payoutBank" JSONB`);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "AffiliateCommission" (
+        "id" TEXT PRIMARY KEY,
+        "affiliateId" TEXT NOT NULL,
+        "clientId" TEXT NOT NULL,
+        "monthIndex" INTEGER NOT NULL,
+        "amount" INTEGER NOT NULL,
+        "basisAmount" INTEGER NOT NULL,
+        "createdAt" TIMESTAMP DEFAULT now()
+      )
+    `);
+    await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "AffiliateCommission_clientId_monthIndex_key" ON "AffiliateCommission"("clientId","monthIndex")`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "AffiliateCommission_affiliateId_idx" ON "AffiliateCommission"("affiliateId")`);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "AffiliatePayout" (
+        "id" TEXT PRIMARY KEY,
+        "affiliateId" TEXT NOT NULL,
+        "amount" INTEGER NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'pending',
+        "bankSnapshot" JSONB,
+        "adminNote" TEXT,
+        "createdAt" TIMESTAMP DEFAULT now(),
+        "paidAt" TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "AffiliatePayout_affiliateId_idx" ON "AffiliatePayout"("affiliateId")`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "AffiliatePayout_status_idx" ON "AffiliatePayout"("status")`);
     // Композит index — захиалгын жагсаалт/тайлангийн гол хайлт (orgId+status+createdAt).
     // Хүснэгт одоо жижиг тул энгийн CREATE INDEX шууд ажиллана (түгжээ мэдэгдэхгүй).
     // (CONCURRENTLY нь Prisma-гийн raw query дотор ажиллахгүй; аль хэдийн асар том

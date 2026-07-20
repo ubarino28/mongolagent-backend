@@ -59,7 +59,7 @@ function signStaffToken(staff, org) {
 // POST /auth/register
 router.post("/register", authLimiter, async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, referralCode } = req.body;
     if (!name || !email || !password) return res.status(400).json({ error: "name, email, password шаардлагатай" });
     if (password.length < 8) return res.status(400).json({ error: "Нууц үг хамгийн багадаа 8 тэмдэгт байна" });
 
@@ -74,8 +74,18 @@ router.post("/register", authLimiter, async (req, res) => {
     const trialEnds = new Date();
     trialEnds.setDate(trialEnds.getDate() + 30);
 
+    // Affiliate: урих код бичсэн бол санал болгогчийг олж холбоно (referredAt нь анхны
+    // ТӨЛБӨРИЙН үед л тавигдана — бүртгүүлсэн даруйд комисс эхлэхгүй).
+    let referredBy = null;
+    if (referralCode) {
+      const ref = await prisma.organization.findUnique({
+        where: { referralCode: String(referralCode).trim().toUpperCase() }, select: { id: true },
+      });
+      if (ref) referredBy = ref.id;
+    }
+
     const org = await prisma.organization.create({
-      data: { name, slug, email, passwordHash, subscriptionEndsAt: trialEnds, plan: "growth" },
+      data: { name, slug, email, passwordHash, subscriptionEndsAt: trialEnds, plan: "growth", referredBy },
     });
 
     const token = signToken(org);

@@ -4,6 +4,7 @@ const app = require("./app");
 const { startDomainHealthLoop } = require("./services/domainHealth.service");
 const { startReconciliation } = require("./services/reconcile.service");
 const { startRetention } = require("./services/retention.service");
+const { startAffiliateAccrual } = require("./services/affiliate.service");
 const { captureException } = require("./lib/sentry");
 const { getPrisma } = require("./lib/db");
 
@@ -80,6 +81,8 @@ const server = app.listen(PORT, () => {
   // Өдөрт нэг удаа хадгалах хугацааны бодлого. ӨГӨГДМӨЛ нь DRY-RUN (зөвхөн тоолно) —
   // жинхэнэ устгалыг RETENTION_ENABLED=1-ээр асаана.
   startRetention();
+  // Өдөрт нэг удаа affiliate комиссыг боловсруулна (сар бүр аажим).
+  startAffiliateAccrual();
 });
 
 // Graceful shutdown — Render deploy/restart үед холболтуудыг цэвэрхэн хаана (DB connection алдагдахаас сэргийлнэ)

@@ -93,6 +93,22 @@ async function applySubscriptionPayment(prisma, org) {
           meta: { plan: finalPlan, months, period: periodKey, perMonth, totalPaid: perMonth * months } },
       });
     } catch { /* тайлангийн бүртгэл — үндсэн урсгалд нөлөөлөхгүй */ }
+
+    // Affiliate: комиссын суурь болох эффектив сарын үнийг тэмдэглэнэ. Мөн энэ нь
+    // санал болгогдсон клиентийн АНХНЫ төлбөр бол referredAt-ыг тавьж 12 сарын
+    // цонхыг эхлүүлнэ (комисс зөвхөн ТӨЛБӨР ТӨЛӨГДСӨН үед эхэлдэг).
+    try {
+      const finalPlan = newPlan || (await prisma.organization.findUnique({ where: { id: org.id }, select: { plan: true } }))?.plan || "starter";
+      const periodKey = Object.keys(PERIOD_MONTHS).find((k) => PERIOD_MONTHS[k] === months) || "monthly";
+      const perMonth = PLAN_PERIOD_PRICE[finalPlan]?.[periodKey] ?? PLAN_PERIOD_PRICE[finalPlan]?.monthly ?? 0;
+      const cur = await prisma.organization.findUnique({ where: { id: org.id }, select: { referredBy: true, referredAt: true } });
+      const affData = { subPerMonth: perMonth };
+      // referredAt-ыг subscription-ий суурьтай ЯГ ижил `now`-оор тавина (тусдаа new Date()
+      // биш) — эс тэгвэл referredAt хэдэн ms хойш унаж, accrual-ийн сарын хил (referredAt+N×30д)
+      // subscriptionEndsAt-аас эпсилоноор давж, комисс бодогдохгүй болно.
+      if (cur?.referredBy && !cur.referredAt && cur.referredBy !== org.id) affData.referredAt = now;
+      await prisma.organization.update({ where: { id: org.id }, data: affData });
+    } catch { /* affiliate тэмдэглэл — үндсэн урсгалд нөлөөлөхгүй */ }
   }
   return { applied: r.count === 1, subscriptionEndsAt };
 }

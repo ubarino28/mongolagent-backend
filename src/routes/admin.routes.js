@@ -716,4 +716,72 @@ router.get("/billing", async (req, res) => {
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
+// ─── AFFILIATE PAYOUT (татах хүсэлт баталгаажуулах) ───────────────────────────
+
+// GET /admin/payouts — татах хүсэлтүүд (default: pending). Мерчантын нэр + данс хамт.
+router.get("/payouts", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const status = req.query.status || "pending";
+    const payouts = await prisma.affiliatePayout.findMany({
+      where: status === "all" ? {} : { status: String(status) },
+      orderBy: { createdAt: "desc" }, take: 200,
+    });
+    // Мерчантын нэр/и-мэйл нэмнэ
+    const ids = [...new Set(payouts.map((p) => p.affiliateId))];
+    const orgs = await prisma.organization.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true } });
+    const byId = Object.fromEntries(orgs.map((o) => [o.id, o]));
+    res.json({
+      payouts: payouts.map((p) => ({
+        ...p, affiliateName: byId[p.affiliateId]?.name || "—", affiliateEmail: byId[p.affiliateId]?.email || "—",
+      })),
+    });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /admin/payouts/:id/pay — банкаар шилжүүлсний дараа "төлсөн" болгоно.
+// БАЛАНС ДАХИН ШАЛГАНА: татах хүсэлт үүсэх үеийн шалгалт нь TOCTOU race-тэй (нэг
+// хэрэглэгч зэрэг 2 хүсэлт илгээвэл хоёулаа pending болж болзошгүй). Мөнгө ГАДАГШ
+// гарах цэг болох ЭНД, олсон комиссоос хэтрэхгүйг эцэслэн баталгаажуулна.
+router.post("/payouts/:id/pay", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const payout = await prisma.affiliatePayout.findUnique({ where: { id: req.params.id } });
+    if (!payout || payout.status !== "pending") return res.status(409).json({ error: "Хүсэлт олдсонгүй эсвэл аль хэдийн шийдэгдсэн" });
+
+    // Энэ мерчантын олсон нийт комисс vs аль хэдийн ТӨЛСӨН нийт. Одоо төлөх дүн нэмэхэд
+    // олсноос хэтэрвэл татгалзана (давхар/хэт татахаас сэргийлнэ).
+    const [earned, paid] = await Promise.all([
+      prisma.affiliateCommission.aggregate({ where: { affiliateId: payout.affiliateId }, _sum: { amount: true } }),
+      prisma.affiliatePayout.aggregate({ where: { affiliateId: payout.affiliateId, status: "paid" }, _sum: { amount: true } }),
+    ]);
+    const earnedTotal = earned._sum.amount || 0;
+    const paidTotal = paid._sum.amount || 0;
+    if (paidTotal + payout.amount > earnedTotal) {
+      return res.status(400).json({ error: `Олсон комиссоос хэтэрч байна. Олсон: ₮${earnedTotal.toLocaleString()}, төлсөн: ₮${paidTotal.toLocaleString()}, энэ хүсэлт: ₮${payout.amount.toLocaleString()}` });
+    }
+
+    // Зөвхөн pending→paid шилжилт (давхар төлөхөөс сэргийлнэ)
+    const r = await prisma.affiliatePayout.updateMany({
+      where: { id: req.params.id, status: "pending" },
+      data: { status: "paid", paidAt: new Date(), adminNote: req.body?.note ? String(req.body.note).slice(0, 300) : null },
+    });
+    if (r.count !== 1) return res.status(409).json({ error: "Хүсэлт олдсонгүй эсвэл аль хэдийн шийдэгдсэн" });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /admin/payouts/:id/reject — татгалзах (дүн боломжит үлдэгдэлд буцаж нэмэгдэнэ)
+router.post("/payouts/:id/reject", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const r = await prisma.affiliatePayout.updateMany({
+      where: { id: req.params.id, status: "pending" },
+      data: { status: "rejected", adminNote: req.body?.note ? String(req.body.note).slice(0, 300) : null },
+    });
+    if (r.count !== 1) return res.status(409).json({ error: "Хүсэлт олдсонгүй эсвэл аль хэдийн шийдэгдсэн" });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
 module.exports = router;
