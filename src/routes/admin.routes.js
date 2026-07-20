@@ -716,4 +716,54 @@ router.get("/billing", async (req, res) => {
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
+// ─── AFFILIATE PAYOUT (татах хүсэлт баталгаажуулах) ───────────────────────────
+
+// GET /admin/payouts — татах хүсэлтүүд (default: pending). Мерчантын нэр + данс хамт.
+router.get("/payouts", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const status = req.query.status || "pending";
+    const payouts = await prisma.affiliatePayout.findMany({
+      where: status === "all" ? {} : { status: String(status) },
+      orderBy: { createdAt: "desc" }, take: 200,
+    });
+    // Мерчантын нэр/и-мэйл нэмнэ
+    const ids = [...new Set(payouts.map((p) => p.affiliateId))];
+    const orgs = await prisma.organization.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true } });
+    const byId = Object.fromEntries(orgs.map((o) => [o.id, o]));
+    res.json({
+      payouts: payouts.map((p) => ({
+        ...p, affiliateName: byId[p.affiliateId]?.name || "—", affiliateEmail: byId[p.affiliateId]?.email || "—",
+      })),
+    });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /admin/payouts/:id/pay — банкаар шилжүүлсний дараа "төлсөн" болгоно
+router.post("/payouts/:id/pay", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    // Зөвхөн pending→paid шилжилт (давхар төлөхөөс сэргийлнэ)
+    const r = await prisma.affiliatePayout.updateMany({
+      where: { id: req.params.id, status: "pending" },
+      data: { status: "paid", paidAt: new Date(), adminNote: req.body?.note ? String(req.body.note).slice(0, 300) : null },
+    });
+    if (r.count !== 1) return res.status(409).json({ error: "Хүсэлт олдсонгүй эсвэл аль хэдийн шийдэгдсэн" });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /admin/payouts/:id/reject — татгалзах (дүн боломжит үлдэгдэлд буцаж нэмэгдэнэ)
+router.post("/payouts/:id/reject", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const r = await prisma.affiliatePayout.updateMany({
+      where: { id: req.params.id, status: "pending" },
+      data: { status: "rejected", adminNote: req.body?.note ? String(req.body.note).slice(0, 300) : null },
+    });
+    if (r.count !== 1) return res.status(409).json({ error: "Хүсэлт олдсонгүй эсвэл аль хэдийн шийдэгдсэн" });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
 module.exports = router;

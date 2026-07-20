@@ -34,6 +34,12 @@ model Organization {
   messageUsed         Int      @default(0)
   quotaResetAt        DateTime?
   subscriptionEndsAt  DateTime?
+  // Affiliate (санал болгох) хөтөлбөр
+  referralCode       String?   @unique  // өөрийн урих код (/affiliate-д lazy үүснэ)
+  referredBy         String?            // энэ клиентийг урьсан мерчантын orgId
+  referredAt         DateTime?          // клиентийн анхны subscription төлбөр — 12 сарын анкор
+  subPerMonth        Int?               // сүүлийн subscription-ий эффектив сарын үнэ (комиссын суурь)
+  payoutBank         Json?              // { bankName, accountNumber, accountName }
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -41,6 +47,36 @@ model Organization {
   store  Store?
   staff  StaffMember[]
   templatePurchases TemplatePurchase[]
+}
+
+// Affiliate комисс — санал болгосон клиентийн идэвхтэй сар бүрт НЭГ мөр.
+// (clientId, monthIndex) unique нь accrual job-ийн идемпотентыг хангана.
+model AffiliateCommission {
+  id          String   @id @default(uuid())
+  affiliateId String   // комисс авах мерчант (orgId)
+  clientId    String   // санал болгогдсон клиент (orgId)
+  monthIndex  Int      // referredAt-аас хойшхи сарын дугаар (1..12)
+  amount      Int      // тухайн сарын комисс (10% × basisAmount)
+  basisAmount Int      // тухайн сарын эффектив subscription үнэ
+  createdAt   DateTime @default(now())
+
+  @@unique([clientId, monthIndex])
+  @@index([affiliateId])
+}
+
+// Affiliate татах хүсэлт — админ гар аргаар банкаар шилжүүлж paid болгоно.
+model AffiliatePayout {
+  id           String   @id @default(uuid())
+  affiliateId  String
+  amount       Int
+  status       String   @default("pending") // pending | paid | rejected
+  bankSnapshot Json?    // хүсэлт үүсэх үеийн данс (хожим өөрчлөгдвөл ч мөрдөгдөнө)
+  adminNote    String?
+  createdAt    DateTime @default(now())
+  paidAt       DateTime?
+
+  @@index([affiliateId])
+  @@index([status])
 }
 
 // Загвар (template) худалдан авалт — orgId+templateId-аар нэг л бичлэг, PAID бол эзэмшсэн
