@@ -2248,6 +2248,226 @@ router.delete("/account", requireOwner, async (req, res) => {
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
+// ─── AFFILIATE (санал болгох хөтөлбөр) ────────────────────────────────────────
+const affiliate = require("../services/affiliate.service");
+
+// GET /client/affiliate — өөрийн урих код (байхгүй бол үүсгэнэ), баланс, дүнгүүд
+router.get("/affiliate", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const code = await affiliate.ensureReferralCode(prisma, orgId);
+    const balance = await affiliate.getBalance(prisma, orgId);
+    const clientCount = await prisma.organization.count({ where: { referredBy: orgId } });
+    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { payoutBank: true } });
+    res.json({
+      code, balance, clientCount, payoutBank: org?.payoutBank || null,
+      rate: affiliate.COMMISSION_RATE, months: affiliate.COMMISSION_MONTHS, minWithdraw: affiliate.MIN_WITHDRAW,
+    });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// GET /client/affiliate/clients — урьсан клиентүүд + subscription төлөв + тэднээс олсон нийт
+router.get("/affiliate/clients", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const clients = await prisma.organization.findMany({
+      where: { referredBy: orgId },
+      select: { id: true, name: true, plan: true, status: true, subscriptionEndsAt: true, referredAt: true, subPerMonth: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 500,
+    });
+    // Клиент бүрээс олсон нийт комисс
+    const sums = await prisma.affiliateCommission.groupBy({
+      by: ["clientId"], where: { affiliateId: orgId }, _sum: { amount: true }, _count: { _all: true },
+    });
+    const byClient = Object.fromEntries(sums.map((s) => [s.clientId, { earned: s._sum.amount || 0, months: s._count._all }]));
+    const now = Date.now();
+    const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
+    res.json({
+      clients: clients.map((c) => {
+        const earnedMonths = byClient[c.id]?.months || 0;
+        // Комиссын 12 сарын цонхноос хэд өнгөрснийг тооцно (referredAt-аас хойш)
+        const elapsed = c.referredAt ? Math.min(12, Math.floor((now - new Date(c.referredAt).getTime()) / MONTH_MS)) : 0;
+        return {
+          id: c.id, name: c.name, plan: c.plan,
+          active: !!(c.status === "active" && c.subscriptionEndsAt && new Date(c.subscriptionEndsAt).getTime() > now),
+          paid: !!c.referredAt, // subscription төлсөн эсэх (referredAt = анхны төлбөр)
+          joinedAt: c.createdAt,
+          referredAt: c.referredAt,                 // комисс эхэлсэн огноо
+          subscriptionEndsAt: c.subscriptionEndsAt, // subscription дуусах огноо
+          monthlyCommission: Math.round((c.subPerMonth || 0) * affiliate.COMMISSION_RATE), // сард дунджаар
+          earned: byClient[c.id]?.earned || 0,
+          commissionMonths: earnedMonths,           // хэдэн сарын комисс бодогдсон
+          monthsRemaining: Math.max(0, 12 - earnedMonths), // үлдсэн (12-оос)
+          windowElapsed: elapsed,                   // 12 сарын цонхноос өнгөрсөн
+        };
+      }),
+    });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// GET /client/affiliate/clients/:id — нэг клиентийн дэлгэрэнгүй + сар бүрийн комиссын задаргаа
+router.get("/affiliate/clients/:id", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    // Зөвхөн ӨӨРИЙН урьсан клиентийг л харна (өөр хүний клиент рүү хандахаас сэргийлнэ)
+    const c = await prisma.organization.findFirst({
+      where: { id: req.params.id, referredBy: orgId },
+      select: { id: true, name: true, plan: true, status: true, subscriptionEndsAt: true, referredAt: true, subPerMonth: true, createdAt: true },
+    });
+    if (!c) return res.status(404).json({ error: "Клиент олдсонгүй" });
+    const commissions = await prisma.affiliateCommission.findMany({
+      where: { affiliateId: orgId, clientId: c.id },
+      select: { monthIndex: true, amount: true, basisAmount: true, createdAt: true },
+      orderBy: { monthIndex: "asc" },
+    });
+    const now = Date.now();
+    res.json({
+      client: {
+        id: c.id, name: c.name, plan: c.plan,
+        active: !!(c.status === "active" && c.subscriptionEndsAt && new Date(c.subscriptionEndsAt).getTime() > now),
+        paid: !!c.referredAt,
+        joinedAt: c.createdAt, referredAt: c.referredAt, subscriptionEndsAt: c.subscriptionEndsAt,
+        monthlyCommission: Math.round((c.subPerMonth || 0) * affiliate.COMMISSION_RATE),
+        totalEarned: commissions.reduce((s, x) => s + x.amount, 0),
+      },
+      commissions, // [{ monthIndex, amount, basisAmount, createdAt }]
+    });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// GET /client/affiliate/analytics — сүүлийн 12 сарын комисс (график)
+router.get("/affiliate/analytics", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const since = new Date(); since.setMonth(since.getMonth() - 11); since.setDate(1); since.setHours(0, 0, 0, 0);
+    const rows = await prisma.affiliateCommission.findMany({
+      where: { affiliateId: orgId, createdAt: { gte: since } },
+      select: { amount: true, createdAt: true },
+    });
+    // Сар бүрээр нэгтгэнэ (YYYY-MM)
+    const buckets = {};
+    for (const r of rows) {
+      const d = new Date(r.createdAt);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      buckets[key] = (buckets[key] || 0) + r.amount;
+    }
+    // 12 сарын бүрэн муж (хоосон сар = 0)
+    const series = [];
+    const cur = new Date(since);
+    for (let i = 0; i < 12; i++) {
+      const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`;
+      series.push({ month: key, amount: buckets[key] || 0 });
+      cur.setMonth(cur.getMonth() + 1);
+    }
+    res.json({ series });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// PUT /client/affiliate/bank — татах данс хадгалах (зөвхөн эзэн)
+router.put("/affiliate/bank", requireOwner, async (req, res) => {
+  try {
+    const { bankName, accountNumber, accountName } = req.body || {};
+    if (!bankName || !accountNumber || !accountName) return res.status(400).json({ error: "Банк, дансны дугаар, эзэмшигчийн нэр шаардлагатай" });
+    const payoutBank = {
+      bankName: String(bankName).slice(0, 80),
+      accountNumber: String(accountNumber).slice(0, 40),
+      accountName: String(accountName).slice(0, 120),
+    };
+    await getPrisma().organization.update({ where: { id: req.org.orgId }, data: { payoutBank } });
+    res.json({ ok: true, payoutBank });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /client/affiliate/withdraw — татах хүсэлт (зөвхөн эзэн). Мин 50k, баланс хүрэлцэх ёстой.
+router.post("/affiliate/withdraw", requireOwner, async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { payoutBank: true } });
+    if (!org?.payoutBank) return res.status(400).json({ error: "Эхлээд татах дансаа тохируулна уу" });
+
+    const requested = Math.floor(Number(req.body?.amount) || 0);
+    if (requested < affiliate.MIN_WITHDRAW) return res.status(400).json({ error: `Хамгийн багадаа ₮${affiliate.MIN_WITHDRAW.toLocaleString()} татна` });
+
+    const balance = await affiliate.getBalance(prisma, orgId);
+    if (requested > balance.available) return res.status(400).json({ error: "Боломжит үлдэгдэлээс их дүн байна" });
+
+    const payout = await prisma.affiliatePayout.create({
+      data: { id: require("crypto").randomUUID(), affiliateId: orgId, amount: requested, status: "pending", bankSnapshot: org.payoutBank },
+    });
+    // Эзэнд мэдэгдэл (туслах урсгал)
+    try {
+      const { notifyOwner } = require("../services/notify.service");
+      notifyOwner(orgId, "Комисс татах хүсэлт хүлээн авлаа", {
+        Дүн: `₮${requested.toLocaleString()}`,
+        Төлөв: "24-48 цагийн дотор дансанд шилжүүлнэ",
+      }).catch(() => {});
+    } catch { /* no-op */ }
+    res.json({ ok: true, payout: { id: payout.id, amount: payout.amount, status: payout.status } });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// GET /client/affiliate/payouts — өөрийн татах хүсэлтийн түүх
+router.get("/affiliate/payouts", async (req, res) => {
+  try {
+    const payouts = await getPrisma().affiliatePayout.findMany({
+      where: { affiliateId: req.org.orgId },
+      select: { id: true, amount: true, status: true, createdAt: true, paidAt: true },
+      orderBy: { createdAt: "desc" }, take: 100,
+    });
+    res.json({ payouts });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// GET /client/affiliate/referral-status — намайг хэн нэгэн урьсан эсэх, код нэмж
+// болох эсэх (төлбөрийн өмнө л). Register/Төлбөр хуудсанд урих код оруулах хэсгийг
+// харуулах эсэхийг шийдэхэд ашиглана. (GET /affiliate шиг код үүсгэхгүй — хөнгөн.)
+router.get("/affiliate/referral-status", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { referredBy: true, referredAt: true } });
+    const hasReferrer = !!org?.referredBy;
+    let canSetReferral = false;
+    if (!hasReferrer && !org?.referredAt) {
+      const paidBefore = await prisma.auditLog.count({ where: { orgId, action: "subscription.paid" } });
+      canSetReferral = paidBefore === 0;
+    }
+    res.json({ hasReferrer, canSetReferral });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// PUT /client/affiliate/referral — урих код нэмэх (зөвхөн эзэн).
+// ⚠️ ЗӨВХӨН subscription төлбөр төлж байгаагүй үед. Хуучин төлсөн клиент код нэмж
+//    retroactive комисс үүсгэхээс сэргийлнэ.
+router.put("/affiliate/referral", requireOwner, async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const orgId = req.org.orgId;
+    const raw = String(req.body?.code || "").trim().toUpperCase();
+    if (!raw) return res.status(400).json({ error: "Код шаардлагатай" });
+
+    const me = await prisma.organization.findUnique({ where: { id: orgId }, select: { referredBy: true, referredAt: true } });
+    if (me?.referredBy) return res.status(400).json({ error: "Урих код аль хэдийн тохируулсан байна" });
+
+    // Хэзээ нэгэн цагт subscription төлсөн эсэх — төлсөн бол хожуу код нэмэхийг хориглоно
+    const paidBefore = await prisma.auditLog.count({ where: { orgId, action: "subscription.paid" } });
+    if (me?.referredAt || paidBefore > 0) return res.status(400).json({ error: "Та аль хэдийн төлбөр төлсөн тул урих код нэмэх боломжгүй" });
+
+    const referrer = await prisma.organization.findUnique({ where: { referralCode: raw }, select: { id: true } });
+    if (!referrer) return res.status(404).json({ error: "Ийм урих код олдсонгүй" });
+    if (referrer.id === orgId) return res.status(400).json({ error: "Өөрийн кодыг ашиглах боломжгүй" });
+
+    await prisma.organization.update({ where: { id: orgId }, data: { referredBy: referrer.id } });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
 // ─── BILLING ─────────────────────────────────────────────────────────────────
 
 // GET /client/billing
