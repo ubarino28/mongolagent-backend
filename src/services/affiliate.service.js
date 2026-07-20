@@ -81,6 +81,10 @@ async function accrueForClient(prisma, client, now = new Date()) {
   const upto = Math.min(elapsedMonths, COMMISSION_MONTHS); // хамгийн ихдээ 12 сар
   if (upto < 1) return 0;
 
+  // ЗАМЕЧАНИ: комиссын суурь нь клиентийн ОДООГИЙН subPerMonth (сүүлийн төлбөрийн үнэ).
+  // Клиент план солиод, өнгөрсөн сар хожуу боловсорвол (accrual удаашрал/downtime) тэр
+  // саруудыг одоогийн үнээр бодно — багавтар зөрүү үүсэж болзошгүй. Өдрийн job тогтмол
+  // ажилладаг тул цонх багахан (зөвхөн шинэ боловсорсон сар).
   const amount = Math.round(subPerMonth * COMMISSION_RATE);
   let created = 0;
   for (let monthIndex = 1; monthIndex <= upto; monthIndex++) {
@@ -90,8 +94,10 @@ async function accrueForClient(prisma, client, now = new Date()) {
         data: { id: crypto.randomUUID(), affiliateId: referredBy, clientId, monthIndex, amount, basisAmount: subPerMonth },
       });
       created++;
-    } catch {
-      // (clientId, monthIndex) unique зөрчил = аль хэдийн бодсон → алгасна (идемпотент)
+    } catch (e) {
+      // (clientId, monthIndex) unique зөрчил (Prisma P2002) = аль хэдийн бодсон → алгасна
+      // (идемпотент). Бусад алдаа (FK, DB) бол лог үлдээж дараагийн job дахин оролдоно.
+      if (e?.code !== "P2002") console.error(`[affiliate] accrue create ${clientId}/${monthIndex}`, e.message);
     }
   }
   return created;

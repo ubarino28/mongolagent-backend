@@ -20,6 +20,20 @@ test("wasActiveThroughMonth: subscriptionEndsAt байхгүй бол false", ()
   assert.strictEqual(wasActiveThroughMonth(new Date("2026-01-01"), null, 1), false);
 });
 
+// ХИЛИЙН тест — payment.service referredAt-ыг subscription-ий суурьтай ижил `now`-оор
+// тавьдаг тул эдгээр яг тэнцүү байх ёстой. Эпсилон зөрүү гарвал энэ унана.
+test("wasActiveThroughMonth: сараар (endsAt = referredAt + ЯГ 30хон) → сар 1 true", () => {
+  const referredAt = new Date("2026-01-01T00:00:00.000Z");
+  const monthly = new Date(referredAt.getTime() + 30 * DAY); // яг 1 сар
+  assert.strictEqual(wasActiveThroughMonth(referredAt, monthly, 1), true);
+});
+
+test("wasActiveThroughMonth: жилээр (endsAt = referredAt + ЯГ 360хон) → сар 12 true", () => {
+  const referredAt = new Date("2026-01-01T00:00:00.000Z");
+  const yearly = new Date(referredAt.getTime() + 12 * 30 * DAY); // яг 12 сар
+  assert.strictEqual(wasActiveThroughMonth(referredAt, yearly, 12), true);
+});
+
 // ── accrueForClient ──────────────────────────────────────────────────────────
 
 // Дуудлагыг бүртгэдэг хуурамч prisma. AffiliateCommission-д (clientId,monthIndex)

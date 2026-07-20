@@ -103,7 +103,10 @@ async function applySubscriptionPayment(prisma, org) {
       const perMonth = PLAN_PERIOD_PRICE[finalPlan]?.[periodKey] ?? PLAN_PERIOD_PRICE[finalPlan]?.monthly ?? 0;
       const cur = await prisma.organization.findUnique({ where: { id: org.id }, select: { referredBy: true, referredAt: true } });
       const affData = { subPerMonth: perMonth };
-      if (cur?.referredBy && !cur.referredAt && cur.referredBy !== org.id) affData.referredAt = new Date();
+      // referredAt-ыг subscription-ий суурьтай ЯГ ижил `now`-оор тавина (тусдаа new Date()
+      // биш) — эс тэгвэл referredAt хэдэн ms хойш унаж, accrual-ийн сарын хил (referredAt+N×30д)
+      // subscriptionEndsAt-аас эпсилоноор давж, комисс бодогдохгүй болно.
+      if (cur?.referredBy && !cur.referredAt && cur.referredBy !== org.id) affData.referredAt = now;
       await prisma.organization.update({ where: { id: org.id }, data: affData });
     } catch { /* affiliate тэмдэглэл — үндсэн урсгалд нөлөөлөхгүй */ }
   }

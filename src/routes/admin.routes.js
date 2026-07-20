@@ -739,10 +739,28 @@ router.get("/payouts", async (req, res) => {
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
-// POST /admin/payouts/:id/pay — банкаар шилжүүлсний дараа "төлсөн" болгоно
+// POST /admin/payouts/:id/pay — банкаар шилжүүлсний дараа "төлсөн" болгоно.
+// БАЛАНС ДАХИН ШАЛГАНА: татах хүсэлт үүсэх үеийн шалгалт нь TOCTOU race-тэй (нэг
+// хэрэглэгч зэрэг 2 хүсэлт илгээвэл хоёулаа pending болж болзошгүй). Мөнгө ГАДАГШ
+// гарах цэг болох ЭНД, олсон комиссоос хэтрэхгүйг эцэслэн баталгаажуулна.
 router.post("/payouts/:id/pay", async (req, res) => {
   try {
     const prisma = getPrisma();
+    const payout = await prisma.affiliatePayout.findUnique({ where: { id: req.params.id } });
+    if (!payout || payout.status !== "pending") return res.status(409).json({ error: "Хүсэлт олдсонгүй эсвэл аль хэдийн шийдэгдсэн" });
+
+    // Энэ мерчантын олсон нийт комисс vs аль хэдийн ТӨЛСӨН нийт. Одоо төлөх дүн нэмэхэд
+    // олсноос хэтэрвэл татгалзана (давхар/хэт татахаас сэргийлнэ).
+    const [earned, paid] = await Promise.all([
+      prisma.affiliateCommission.aggregate({ where: { affiliateId: payout.affiliateId }, _sum: { amount: true } }),
+      prisma.affiliatePayout.aggregate({ where: { affiliateId: payout.affiliateId, status: "paid" }, _sum: { amount: true } }),
+    ]);
+    const earnedTotal = earned._sum.amount || 0;
+    const paidTotal = paid._sum.amount || 0;
+    if (paidTotal + payout.amount > earnedTotal) {
+      return res.status(400).json({ error: `Олсон комиссоос хэтэрч байна. Олсон: ₮${earnedTotal.toLocaleString()}, төлсөн: ₮${paidTotal.toLocaleString()}, энэ хүсэлт: ₮${payout.amount.toLocaleString()}` });
+    }
+
     // Зөвхөн pending→paid шилжилт (давхар төлөхөөс сэргийлнэ)
     const r = await prisma.affiliatePayout.updateMany({
       where: { id: req.params.id, status: "pending" },
