@@ -90,6 +90,19 @@ router.get("/profile/facebook/callback", async (req, res) => {
     });
     const pages = pagesRes.data.data || [];
 
+    // 0 page ирвэл ЯАГААД гэдгийг оношилж, тодорхой алдаа буцаана (мерчантад ойлгомжтой заавар өгөх).
+    if (pages.length === 0) {
+      let granted = [];
+      try {
+        const perm = await axios.get("https://graph.facebook.com/v19.0/me/permissions", { params: { access_token: userToken } });
+        granted = (perm.data.data || []).filter((p) => p.status === "granted").map((p) => p.permission);
+      } catch { /* оношлогоо амжилтгүй — ерөнхий алдаа */ }
+      console.warn("[FB OAuth] 0 pages буцлаа. Олгосон эрх:", granted.join(",") || "(алга)");
+      // pages_show_list олгоогүй бол → эрхийн асуудал; олгосон атал page байхгүй бол → админ биш/бизнес хуудасгүй
+      const reason = granted.includes("pages_show_list") ? "no_pages" : "no_page_permission";
+      return res.redirect(`${FRONTEND_URL}/profile?fb_error=${reason}`);
+    }
+
     // Instagram аккаунтуудыг page-аас авна
     const pagesWithIg = await Promise.all(
       pages.map(async (p) => {
@@ -142,7 +155,10 @@ router.get("/profile/facebook/auth-url", requireOwner, (req, res) => {
     "instagram_manage_messages",  // Instagram DM хариулах
   ].join(",");
 
-  const url = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FB_APP_ID}&redirect_uri=${encodeURIComponent(FB_CALLBACK)}&scope=${scope}&state=${state}`;
+  // auth_type=rerequest — өмнө олгоогүй/цуцалсан эрхийг Facebook ДАХИН асуудаг болгоно.
+  // (Үүнгүйгээр өмнө нэг удаа зөвшөөрсөн апп-ыг дахин холбоход эрхийн цонх гарахгүй өнгөрч,
+  //  pages_show_list олгогдоогүй үлдвэл /me/accounts хоосон ирдэг. Мерчант апп устгах шаардлагагүй болно.)
+  const url = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${process.env.FB_APP_ID}&redirect_uri=${encodeURIComponent(FB_CALLBACK)}&scope=${scope}&state=${state}&auth_type=rerequest`;
   res.json({ url });
 });
 
