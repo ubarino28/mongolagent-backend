@@ -41,7 +41,7 @@ const FROM_EMAIL = process.env.FROM_EMAIL || "noreply@mongolagent.mn";
 
 function signToken(org) {
   return jwt.sign(
-    { orgId: org.id, slug: org.slug, name: org.name, plan: org.plan, role: "owner" },
+    { orgId: org.id, slug: org.slug, name: org.name, plan: org.plan, role: "owner", tv: org.tokenVer || 0 },
     jwtSecret(),
     { expiresIn: "7d" }
   );
@@ -203,10 +203,13 @@ router.post("/reset-password", authLimiter, async (req, res) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    await prisma.organization.update({
+    // tokenVer++ → нууц үг сэргээхэд бүх хуучин session (хулгайлагдсан токен ч) цуцлагдана.
+    const updatedOrg = await prisma.organization.update({
       where: { email: resetToken.email },
-      data: { passwordHash },
+      data: { passwordHash, tokenVer: { increment: 1 } },
+      select: { id: true },
     });
+    try { require("../middleware/clientAuth").invalidateAuthCache(updatedOrg.id); } catch { /* кэш 60с-д шинэчлэгдэнэ */ }
 
     await prisma.passwordResetToken.update({
       where: { token },

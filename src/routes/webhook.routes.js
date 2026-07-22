@@ -9,6 +9,7 @@ const { rateLimit } = require("../middleware/rateLimit");
 const { notifyOwner } = require("../services/notify.service");
 const { applySubscriptionPayment, applyTopupPayment } = require("../services/payment.service");
 const { decrypt } = require("../lib/secretCrypto");
+const { refreshChatProfile } = require("../services/contact.service");
 
 const router = express.Router();
 
@@ -24,12 +25,12 @@ if (!process.env.FB_APP_SECRET) {
 const { timingEqual } = require("../lib/timingEqual");
 
 // Facebook webhook-ийн X-Hub-Signature-256 (HMAC-SHA256) шалгана.
-// FB_APP_SECRET тохируулаагүй бол: production-д ТАТГАЛЗАНА (хуурамч webhook-оос сэргийлж),
-// dev/local-д алгасна (тестийг хялбар болгож). FB_APP_SECRET нь OAuth-д ч хэрэгтэй тул
-// production-д ямар ч байсан тохируулагдсан байх ёстой.
+// FB_APP_SECRET тохируулаагүй бол ФЕЙЛ-КЛОУЗ (татгалзана) — зөвхөн ALLOW_UNSIGNED_WEBHOOKS=1
+// гэж ИЛ зөвшөөрсөн үед л алгасна. (Өмнө NODE_ENV!=="production" үед алгасдаг тул NODE_ENV
+// тохируулаагүй/staging орчинд хэн ч хуурамч webhook илгээж болдог нүх байв.)
 function fbSignatureValid(req) {
   const appSecret = process.env.FB_APP_SECRET;
-  if (!appSecret) return process.env.NODE_ENV !== "production";
+  if (!appSecret) return process.env.ALLOW_UNSIGNED_WEBHOOKS === "1";
   const sig = req.get("x-hub-signature-256");
   if (!sig || !sig.startsWith("sha256=")) return false;
   const expected = "sha256=" + crypto.createHmac("sha256", appSecret)
@@ -86,7 +87,7 @@ router.post("/", (req, res) => {
       try {
         const prisma = getPrisma();
         const org = isInstagram
-          ? await prisma.organization.findFirst({ where: { instagramAccountId: platformId } })
+          ? await prisma.organization.findUnique({ where: { instagramAccountId: platformId } })
           : await prisma.organization.findUnique({ where: { fbPageId: platformId } });
         if (org) {
           orgId = org.id;
@@ -100,17 +101,21 @@ router.post("/", (req, res) => {
         const psid = event.sender?.id;
         if (!psid) continue;
         if (event.message?.is_echo) {
-          // Эзэн Messenger-ээс шууд хариулсан бол AI pause хийнэ
-          // Echo-д sender.id = Page ID, recipient.id = хэрэглэгчийн PSID
-          const recipientPsid = event.recipient?.id;
-          if (recipientPsid && orgId) {
-            try {
-              const prisma = getPrisma();
-              await prisma.turuuChat.updateMany({
-                where: { psid: recipientPsid, orgId },
-                data: { aiPaused: true },
-              });
-            } catch { /* non-blocking */ }
+          // Зөвхөн ХҮН (Page Inbox-оос) хариулсан echo-д AI-г pause хийнэ. Ботын өөрийн Send API-аар
+          // илгээсэн мессежийн echo-д app_id БАЙДАГ тул түүнд pause хийхгүй. (Өмнө бүх echo-д pause
+          //  хийдэг тул бот өөрийн хариу бүрд өөрийгөө зогсоож, яриа 1 эргэлтийн дараа үхдэг байв.)
+          if (!event.message.app_id) {
+            // Echo-д sender.id = Page ID, recipient.id = хэрэглэгчийн PSID
+            const recipientPsid = event.recipient?.id;
+            if (recipientPsid && orgId) {
+              try {
+                const prisma = getPrisma();
+                await prisma.turuuChat.updateMany({
+                  where: { psid: recipientPsid, orgId },
+                  data: { aiPaused: true },
+                });
+              } catch { /* non-blocking */ }
+            }
           }
           continue;
         }
@@ -172,6 +177,10 @@ router.post("/", (req, res) => {
             console.error("[webhook] postback error:", err.message);
           }
         }
+
+        // Харилцагчийн нэр/зургийг Graph API-аас (эхний удаа эсвэл 6ц хэтэрсэн бол) шинэчилнэ.
+        // Fire-and-forget — хариу илгээхийг удаашруулахгүй. processMessage чатыг үүсгэсэн тул row байна.
+        if (orgId) refreshChatProfile(orgId, psid, { token }).catch(() => {});
       }
     }
   });
@@ -253,9 +262,10 @@ router.post("/qpay-store/:orderId", whLimit, async (req, res) => {
         return;
       }
 
-      // Идемпотент — нөөц/купон зөвхөн нэг удаа. Аль хэдийн боловсруулсан бол давхар мэдэгдэхгүй.
+      // Идемпотент — нөөц зөвхөн нэг удаа. markStoreOrderPaid дотор дүн/статус дахин
+      // баталгаажна (webhook/polling/reconcile нэг л шалгалтаар дамжина).
       const { markStoreOrderPaid } = require("../services/payment.service");
-      const newlyPaid = await markStoreOrderPaid(prisma, order);
+      const newlyPaid = await markStoreOrderPaid(prisma, order, result);
       if (!newlyPaid) return;
 
       // И-мэйл мэдэгдэл эзэн рүү
@@ -356,7 +366,7 @@ router.post("/sub-qpay/:orgId", whLimit, async (req, res) => {
       // Subscription 30 хоногоор сунгана — webhook болон polling-check нэг л shared helper
       // ашиглана (логик хоёр тийш салахаас сэргийлнэ). Идемпотент: зөвхөн ЭНЭ invoice-ийг
       // боловсруулсан ганц хүсэлт count=1 авна.
-      const { applied, subscriptionEndsAt } = await applySubscriptionPayment(prisma, org);
+      const { applied, subscriptionEndsAt } = await applySubscriptionPayment(prisma, org, result);
       if (!applied) return;
 
       // Платформын түвшний бүртгэл — applySubscriptionPayment дотор AuditLog
@@ -394,7 +404,7 @@ router.post("/topup-qpay/:orgId", whLimit, async (req, res) => {
         return;
       }
 
-      const { applied, added } = await applyTopupPayment(prisma, orgId);
+      const { applied, added } = await applyTopupPayment(prisma, orgId, result);
       if (applied) console.log(`[TopupQPay] Org ${orgId} +${added} message credit`);
     } catch (err) {
       console.error("[TopupQPay callback]", err.message);
@@ -454,7 +464,7 @@ router.post("/web-wallet/:orgId", whLimit, async (req, res) => {
         if (!tx.qpayInvoiceId) continue;
         const result = await subQpay.checkPayment(tx.qpayInvoiceId);
         const paid = (result.count != null ? result.count > 0 : false) || result.payment_status === "PAID";
-        if (paid && paidEnough(result, tx.amount) && await applyWalletTopup(prisma, tx)) {
+        if (paid && await applyWalletTopup(prisma, tx, result)) {
           console.log(`[WebWallet] Org ${req.params.orgId} topped up ${tx.amount}₮`);
         }
       }
@@ -492,7 +502,7 @@ router.post("/domain-qpay/:orgId", whLimit, async (req, res) => {
           console.warn(`[Domain] Order ${order.id} underpaid — paid_amount=${result.paid_amount}, expected=${order.priceMnt}`);
           continue;
         }
-        const r = await fulfillDomainOrder(prisma, { vdomains, vercel }, order);
+        const r = await fulfillDomainOrder(prisma, { vdomains, vercel }, order, result);
         console.log(`[Domain] Org ${req.params.orgId} domain ${order.domain} → ${r.status}`);
       }
     } catch (err) {

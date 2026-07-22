@@ -77,6 +77,23 @@ async function runRetention() {
     }
   }
 
+  // Цаг захиалга / ширээ захиалгын PII нэргүйжүүлэх — эдгээр нь ЦАГ ХУГАЦААНЫ PII агуулдаг ч
+  // өмнө retention job хамардаггүй байсан (бодлогод заасан хугацаанаас хойш ч үлддэг байв).
+  const apptAnon = { customerName: ANON, customerPhone: null, notes: null, psid: null };
+  for (const [key, model] of [["appointmentsAnonymized", "turuuAppointment"], ["reservationsAnonymized", "turuuReservation"]]) {
+    try {
+      const where = { createdAt: { lt: cutoff(MONTHS.orderPii) }, NOT: { customerName: ANON } };
+      if (ENABLED) {
+        const r = await prisma[model].updateMany({ where, data: apptAnon });
+        report[key] = r.count;
+      } else {
+        report[key] = await prisma[model].count({ where });
+      }
+    } catch (e) {
+      report[key] = `алдаа: ${e.message}`;
+    }
+  }
+
   const hasWork = Object.entries(report).some(([k, v]) => k !== "mode" && typeof v === "number" && v > 0);
   if (hasWork || !ENABLED) {
     console.log("[retention]", JSON.stringify(report));

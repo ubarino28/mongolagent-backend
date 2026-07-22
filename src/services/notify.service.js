@@ -64,8 +64,34 @@ function renderEmail(title, rows, ctaLabel, ctaPath) {
     </div>`;
 }
 
+// Мөнгө/захиалгын орлогын үйл явдал уу? (гар утсан дээр "ча-чинг" кассын дуу гаргана)
+function isIncomeEvent(title) {
+  return /захиал|төлбөр|төлөгд|урьдчилга/i.test(String(title || ""));
+}
+
 // Байгууллагын эзэн рүү бүтэцтэй мэдэгдэл илгээнэ. Хэзээ ч алдаа шиднэ гэж бодохгүй.
 async function notifyOwner(orgId, title, rows = {}, cta = {}) {
+  // ── Гар утасны push (и-мэйлээс үл хамаарна) ───────────────────────────────
+  // Захиалга/төлбөр = "ча-чинг" (Shopify маягийн кассын дуу, "orders" суваг),
+  // бусад мэдэгдэл = энгийн дуу. Бүх notifyOwner дуудалт автоматаар push болно.
+  try {
+    const { sendPushToOrg } = require("./push.service");
+    const income = isIncomeEvent(title);
+    const body = Object.entries(rows)
+      .filter(([, v]) => v !== undefined && v !== null && v !== "")
+      .slice(0, 3)
+      .map(([, v]) => String(v))
+      .join(" · ");
+    sendPushToOrg(orgId, {
+      title,
+      body: body || "Дэлгэрэнгүйг апп-аас харна уу",
+      sound: income ? "kaching.wav" : "default",
+      channelId: income ? "orders" : "default",
+      data: { path: cta.path || "", income },
+    }).catch(() => {});
+  } catch { /* push бол туслах урсгал — и-мэйлийг зогсоохгүй */ }
+
+  // ── И-мэйл ─────────────────────────────────────────────────────────────────
   try {
     if (!resend) return false;
     const to = await getOwnerEmail(orgId);

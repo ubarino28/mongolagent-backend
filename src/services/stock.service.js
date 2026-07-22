@@ -17,11 +17,22 @@ async function decrementStockForOrder(prisma, order) {
         where: { id, stock: { gte: qty } },
         data: { stock: { decrement: qty } },
       });
-      // Нөөц хүрэлцэхгүй байсан бол 0 болгоно (хасуу болгохгүй) — зэрэг 2 захиалга хэт зарсан
-      // тохиолдол. Худалдагч мэдэхийн тулд анхааруулга бичнэ.
+      // Нөөц хүрэлцэхгүй байсан бол 0 болгоно (хасуу болгохгүй) — зэрэг 2 захиалга сүүлийн
+      // ширхгийг хоёулаа зарсан тохиолдол. Худалдагчид анхааруулга + мэдэгдэл (эс тэгвэл
+      // байхгүй бараа зарсныг мэдэхгүй үлддэг).
       if (r.count === 0) {
         console.warn(`[stock] OVERSELL — product ${id} нөөц хүрэлцсэнгүй (qty=${qty}), 0 болгов. Захиалга ${order.id}`);
         await prisma.product.updateMany({ where: { id, stock: { gt: 0 } }, data: { stock: 0 } });
+        try {
+          const { notifyOwner } = require("./notify.service");
+          const prod = await prisma.product.findUnique({ where: { id }, select: { name: true } }).catch(() => null);
+          notifyOwner(order.orgId, "⚠️ Нөөц хэтэрсэн захиалга", {
+            Бараа: prod?.name || id,
+            Захиалсан: qty,
+            Захиалга: `#${String(order.id).slice(-6).toUpperCase()}`,
+            Анхаар: "Нөөц хүрэлцэхгүй байхад төлбөр хийгдсэн — хэрэглэгчтэй холбогдоно уу",
+          }, { label: "Захиалга харах", path: "/website/orders" }).catch(() => {});
+        } catch { /* мэдэгдэл — үндсэн урсгалд нөлөөлөхгүй */ }
       }
     } catch (e) {
       console.error("[stock] decrement error:", id, e.message);

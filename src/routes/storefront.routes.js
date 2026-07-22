@@ -10,6 +10,9 @@ const checkoutLimiter = rateLimit({ windowMs: 60_000, max: 12 }); // checkout sp
 const discountLimiter = rateLimit({ windowMs: 60_000, max: 6 }); // купон код brute-force/enumeration-аас
 const reviewLimiter = rateLimit({ windowMs: 60_000, max: 6 }); // сэтгэгдэл спам-аас
 const contactLimiter = rateLimit({ windowMs: 60_000, max: 5 }); // холбоо барих формын спам-аас
+// Захиалга хянах — checkout нь 3с тутам status-ыг polling хийдэг (=20/мин) тул 40/мин зөвшөөрнө.
+// Гэхдээ auth-гүй, дуудалт бүрт QPay руу залгадаг тул хязгааргүй давталт (DoS/QPay зардал)-ыг хаана.
+const orderLimiter = rateLimit({ windowMs: 60_000, max: 40 });
 
 const router = express.Router();
 
@@ -161,6 +164,7 @@ router.post("/:slug/validate-discount", discountLimiter, async (req, res) => {
 // POST /storefront/:slug/checkout
 // body: { items: [{ productId, qty }], customer: { name, phone, email, address }, note, discountCode }
 router.post("/:slug/checkout", checkoutLimiter, async (req, res) => {
+  let reservedDiscount = null; // алдаа гарвал купоны нөөцлөлтийг буцаахад
   try {
     const { items, customer = {}, note, discountCode, deliveryMethod } = req.body;
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: "Сагс хоосон байна" });
@@ -180,7 +184,10 @@ router.post("/:slug/checkout", checkoutLimiter, async (req, res) => {
       const p = byId.get(it.productId);
       if (!p) return res.status(400).json({ error: `Бараа олдсонгүй: ${it.productId}` });
       const qty = Math.max(1, Math.floor(Number(it.qty) || 1));
-      if (p.stock > 0 && qty > p.stock) return res.status(400).json({ error: `"${p.name}" — нөөц хүрэлцэхгүй (үлдсэн: ${p.stock})` });
+      // Нөөцийг АБСОЛЮТ дээд хязгаар болгож үзнэ: stock===0 бол "Дууссан" (frontend-тэй адил) →
+      // захиалахгүй. (Өмнө `p.stock > 0 &&` нөхцөл нь нөөц 0 үед шалгалтыг БҮХЭЛД нь алгасаж,
+      //  дууссан барааг хязгааргүй тоогоор захиалж болдог байв.)
+      if (qty > p.stock) return res.status(400).json({ error: `"${p.name}" — нөөц хүрэлцэхгүй (үлдсэн: ${p.stock})` });
       const lineTotal = p.price * qty;
       total += lineTotal;
       lineItems.push({ productId: p.id, name: p.name, price: p.price, qty, lineTotal, image: Array.isArray(p.images) ? p.images[0] || null : null, variant: it.variant ? String(it.variant).slice(0, 120) : null });
@@ -193,6 +200,19 @@ router.post("/:slug/checkout", checkoutLimiter, async (req, res) => {
     if (discountCode) {
       const r = await evalDiscount(prisma, store.id, discountCode, subtotal);
       if (!r.ok) return res.status(400).json({ error: r.error });
+      // АТОМИК НӨӨЦЛӨЛТ — maxUses хязгаартай купоныг зэрэг захиалгууд хэтрүүлэн ашиглахаас
+      // сэргийлнэ. (Өмнө usedCount-ыг зөвхөн төлбөрийн ДАРАА нэмдэг тул maxUses:1 кодыг олон
+      //  захиалгад давхар хэрэглэж болдог байв.) Захиалга цуцлагдвал releaseDiscount буцаана.
+      if (r.discount.maxUses != null) {
+        const claim = await prisma.discount.updateMany({
+          where: { id: r.discount.id, usedCount: { lt: r.discount.maxUses } },
+          data: { usedCount: { increment: 1 } },
+        });
+        if (claim.count !== 1) return res.status(400).json({ error: "Купоны хязгаар дууссан" });
+      } else {
+        await prisma.discount.updateMany({ where: { id: r.discount.id }, data: { usedCount: { increment: 1 } } });
+      }
+      reservedDiscount = { storeId: store.id, code: r.discount.code };
       discountAmount = r.amount;
       appliedDiscount = r.discount;
       total = Math.max(0, subtotal - discountAmount);
@@ -264,11 +284,17 @@ router.post("/:slug/checkout", checkoutLimiter, async (req, res) => {
       order: { id: order.id, totalAmount: total, subtotal, discountAmount, discountCode: order.discountCode, deliveryFee, deliveryMethod: dmethod, items: lineItems },
       payment: { invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls || [] },
     });
-  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+  } catch (e) {
+    // Купон нөөцөлсөн атлаа доор алдаа гарсан бол нөөцлөлтийг буцаана (код гацахаас сэргийлнэ)
+    if (reservedDiscount) {
+      try { const { releaseDiscount } = require("../services/payment.service"); await releaseDiscount(getPrisma(), reservedDiscount.storeId, reservedDiscount.code); } catch { /* no-op */ }
+    }
+    res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") });
+  }
 });
 
 // GET /storefront/order/:id — захиалгын төлөв + товч мэдээлэл (хянах хуудсанд)
-router.get("/order/:id", async (req, res) => {
+router.get("/order/:id", orderLimiter, async (req, res) => {
   try {
     const prisma = getPrisma();
     const o = await prisma.storeOrder.findUnique({ where: { id: req.params.id } });
@@ -293,7 +319,7 @@ router.get("/order/:id", async (req, res) => {
 });
 
 // GET /storefront/order/:id/status — төлбөрийн төлөв шалгах (polling)
-router.get("/order/:id/status", async (req, res) => {
+router.get("/order/:id/status", orderLimiter, async (req, res) => {
   try {
     const prisma = getPrisma();
     const order = await prisma.storeOrder.findUnique({ where: { id: req.params.id } });
@@ -304,9 +330,9 @@ router.get("/order/:id/status", async (req, res) => {
     if (!order.qpayInvoiceId) return res.json({ status: order.qpayStatus || "PENDING", orderStatus: order.status });
 
     const result = await qpay.checkPayment(order.qpayInvoiceId);
-    const paid = result.invoice_status === "PAID";
-    if (paid) {
-      await markStoreOrderPaid(prisma, order); // идемпотент — давхар хасахгүй
+    // markStoreOrderPaid дотор invoice_status PAID + paidEnough(дүн) ХОЁУЛАА шалгагдана
+    // (webhook-той адил) — дутуу төлбөрийг энэ polling зам PAID болгохгүй.
+    if (await markStoreOrderPaid(prisma, order, result)) {
       return res.json({ status: "PAID", orderStatus: "PAID" });
     }
     res.json({ status: "PENDING", orderStatus: order.status });
@@ -317,8 +343,8 @@ router.get("/order/:id/status", async (req, res) => {
 router.get("/:slug/product/:productId/reviews", async (req, res) => {
   try {
     const prisma = getPrisma();
-    const store = await prisma.store.findUnique({ where: { slug: String(req.params.slug).toLowerCase() }, select: { id: true } });
-    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const store = await prisma.store.findUnique({ where: { slug: String(req.params.slug).toLowerCase() }, select: { id: true, status: true } });
+    if (!store || store.status !== "published") return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
     const reviews = await prisma.review.findMany({
       where: { storeId: store.id, productId: req.params.productId, approved: true },
       orderBy: { createdAt: "desc" },
@@ -336,11 +362,15 @@ router.post("/:slug/reviews", reviewLimiter, async (req, res) => {
   try {
     const { productId, name, rating, comment } = req.body || {};
     if (!productId) return res.status(400).json({ error: "Бараа заагаагүй байна" });
-    const r = Math.max(1, Math.min(5, Math.floor(Number(rating) || 0)));
-    if (!r) return res.status(400).json({ error: "Үнэлгээ (1-5) өгнө үү" });
+    // Үнэлгээг ХӨРВҮҮЛЭХЭЭС ӨМНӨ шалгана. (Өмнө Math.max(1,...) нь үргэлж 1..5 буцаадаг тул
+    // доорх `if (!r)` шалгалт ХЭЗЭЭ Ч биелдэггүй үхмэл код байсан → rating дутуу/0/сөрөг ирвэл
+    // чимээгүй 1 од болж бүртгэгддэг байв.)
+    const n = Number(rating);
+    if (!Number.isInteger(n) || n < 1 || n > 5) return res.status(400).json({ error: "Үнэлгээ (1-5) өгнө үү" });
+    const r = n;
     const prisma = getPrisma();
-    const store = await prisma.store.findUnique({ where: { slug: String(req.params.slug).toLowerCase() }, select: { id: true, orgId: true } });
-    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    const store = await prisma.store.findUnique({ where: { slug: String(req.params.slug).toLowerCase() }, select: { id: true, orgId: true, status: true } });
+    if (!store || store.status !== "published") return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
     // Бараа тухайн дэлгүүрийнх мөн эсэхийг шалгана
     const product = await prisma.product.findFirst({ where: { id: String(productId), storeId: store.id }, select: { id: true } });
     if (!product) return res.status(400).json({ error: "Бараа олдсонгүй" });
@@ -350,7 +380,10 @@ router.post("/:slug/reviews", reviewLimiter, async (req, res) => {
         customerName: name ? String(name).slice(0, 80) : null,
         rating: r,
         comment: comment ? String(comment).slice(0, 1000) : null,
-        approved: true,
+        // МОДЕРАЦ: шинэ сэтгэгдэл эзэн батлах хүртэл НУУГДСАН (approved:false). Ингэснээр
+        // худалдан авалтгүй хэн ч (өрсөлдөгч/бот) хуурамч үнэлгээ шууд нийтэд харуулах боломжгүй.
+        // Эзэн /website/reviews дээрээс харах/нуухыг удирдана.
+        approved: false,
       },
       select: { id: true, customerName: true, rating: true, comment: true, createdAt: true },
     });
@@ -372,7 +405,7 @@ router.post("/:slug/contact", contactLimiter, async (req, res) => {
       where: { slug: String(req.params.slug).toLowerCase() },
       select: { id: true, orgId: true, name: true, status: true },
     });
-    if (!store) return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
+    if (!store || store.status !== "published") return res.status(404).json({ error: "Дэлгүүр олдсонгүй" });
 
     // contact талбар нь утас эсвэл и-мэйл байж болно — @ агуулсан бол и-мэйл гэж үзнэ
     const c = String(contact).slice(0, 160);

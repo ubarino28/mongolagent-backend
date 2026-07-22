@@ -3,8 +3,9 @@ const { test } = require("node:test");
 const assert = require("node:assert");
 const { markStoreOrderPaid, applySubscriptionPayment } = require("../src/services/payment.service");
 
-// updateMany count===1 (анхны шилжилт) → true, нөөц хасах оролдоно
-test("markStoreOrderPaid анхны PENDING→PAID шилжилтэд true буцаана", async () => {
+// updateMany count===1 (анхны шилжилт) → true. Купоны ашиглалт нь CHECKOUT дээр нөөцлөгддөг тул
+// markStoreOrderPaid ДАХИН НЭМЭХГҮЙ (өмнө энд нэмдэг байсан → maxUses купон хэтрэх нүх байв).
+test("markStoreOrderPaid анхны PENDING→PAID шилжилтэд true, купон ДАХИН нэмэхгүй", async () => {
   let discountCalled = false;
   const prisma = {
     storeOrder: { updateMany: async () => ({ count: 1 }) },
@@ -13,11 +14,11 @@ test("markStoreOrderPaid анхны PENDING→PAID шилжилтэд true бу�
   };
   const ok = await markStoreOrderPaid(prisma, { id: "o1", storeId: "s1", discountCode: "ZUN10", items: [] });
   assert.strictEqual(ok, true);
-  assert.strictEqual(discountCalled, true); // купонтой бол ашиглалт тоологдоно
+  assert.strictEqual(discountCalled, false); // купон checkout дээр нөөцлөгдсөн — энд нэмэхгүй
 });
 
-// updateMany count===0 (өөр хүсэлт аль хэдийн PAID болгосон) → false, купон тоологдохгүй
-test("markStoreOrderPaid давхар дуудлагад false буцааж, купон тоолохгүй (идемпотент)", async () => {
+// updateMany count===0 (өөр хүсэлт аль хэдийн PAID болгосон / цуцлагдсан) → false
+test("markStoreOrderPaid давхар дуудлагад false буцаана (идемпотент)", async () => {
   let discountCalled = false;
   const prisma = {
     storeOrder: { updateMany: async () => ({ count: 0 }) },
