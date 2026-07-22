@@ -167,6 +167,7 @@ async function decrementKnowledgeForStoreOrder(orgId, items) {
   const prisma = getPrisma();
   try {
     const touchedKbIds = new Set();
+    let guessed = false;
     for (const it of items) {
       const productId = it.productId;
       const qty = Math.max(1, Math.floor(Number(it.qty) || 1));
@@ -174,18 +175,36 @@ async function decrementKnowledgeForStoreOrder(orgId, items) {
 
       const product = await prisma.product.findUnique({ where: { id: productId }, select: { knowledgeId: true } });
       if (!product?.knowledgeId) continue; // вэбсайт-only бараа — KB-д холбоогүй, Product.stock аль хэдийн хасагдсан
+      const kbId = product.knowledgeId;
 
-      const kb = await prisma.turuuKnowledge.findUnique({ where: { id: product.knowledgeId } });
-      if (!kb) continue;
-      const variants = Array.isArray(kb.variants) ? [...kb.variants] : [];
-      if (variants.length === 0) continue; // variant-гүй бол нөөц хязгааргүй гэж үздэг
-
-      const idx = pickVariantIndex(variants, it.variant);
-      if (idx >= 0) {
+      // АТОМИК: KB мөрийг FOR UPDATE-ээр түгжиж read-modify-write хийнэ. (Өмнө lock-гүй JSON
+      //  массив уншиж-хасаж-бичдэг тул сувгууд хооронд (Messenger vs website) зэрэг захиалга
+      //  сүүлийн ширхгийг хоёулаа зарж болдог байв.) Түгжээ transaction дуустал барина.
+      const r = await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM "TuruuKnowledge" WHERE id = $1 FOR UPDATE', kbId);
+        const kb = await tx.turuuKnowledge.findUnique({ where: { id: kbId } });
+        if (!kb) return { touched: false };
+        const variants = Array.isArray(kb.variants) ? kb.variants.map((v) => ({ ...v })) : [];
+        if (variants.length === 0) return { touched: false }; // variant-гүй = нөөц хязгааргүй
+        const idx = pickVariantIndex(variants, it.variant);
+        if (idx < 0) return { touched: false };
+        // Яг таарсан эсэх (size/color нь variant string-д байгаа эсэх) — үгүй бол "таамагласан"
+        const nv = norm(it.variant);
+        const exact = !!nv && variants.some((x) => (x.size && nv.includes(norm(x.size))) || (x.color && nv.includes(norm(x.color))));
         variants[idx] = { ...variants[idx], stock: Math.max(0, (variants[idx].stock || 0) - qty) };
-        await prisma.turuuKnowledge.update({ where: { id: kb.id }, data: { variants } });
-        touchedKbIds.add(kb.id);
-      }
+        await tx.turuuKnowledge.update({ where: { id: kb.id }, data: { variants } });
+        return { touched: true, guessed: !exact };
+      });
+      if (r.touched) touchedKbIds.add(kbId);
+      if (r.guessed) guessed = true;
+    }
+    // #26: variant тодорхойлж чадаагүй (таамагласан) бол эзэнд мэдэгдэж нөөцийг гараар шалгуулна
+    if (guessed) {
+      try {
+        require("./notify.service").notifyOwner(orgId, "⚠️ Захиалгын variant тодорхойгүй",
+          { Анхаар: "Барааны размер/өнгийг захиалгаас тодорхойлж чадсангүй — холбогдох нөөцийг гараар шалгана уу" },
+          { label: "Бараа харах", path: "/website/products" }).catch(() => {});
+      } catch { /* мэдэгдэл — үндсэн урсгалд нөлөөлөхгүй */ }
     }
     // Хасалтын дараа холбогдсон Product.stock-ийг KB-аас дахин derive хийнэ
     for (const kbId of touchedKbIds) {

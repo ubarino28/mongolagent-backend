@@ -104,6 +104,17 @@ const { getPrisma } = require("./lib/db");
     await prisma.$executeRawUnsafe(
       `ALTER TABLE "TuruuChat" ADD COLUMN IF NOT EXISTS "platform" TEXT DEFAULT 'facebook'`
     );
+    // Хэрэглэгчийн Facebook/Instagram профайлын нэр+зураг (Graph API-аас татаж кэшлэнэ).
+    // profilePic нь түр зуурын CDN URL (хугацаа дуустай) тул profileFetchedAt-аар шинэчлэлтийг хязгаарлана.
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "TuruuChat" ADD COLUMN IF NOT EXISTS "name" TEXT`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "TuruuChat" ADD COLUMN IF NOT EXISTS "profilePic" TEXT`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "TuruuChat" ADD COLUMN IF NOT EXISTS "profileFetchedAt" TIMESTAMP`
+    );
     await prisma.$executeRawUnsafe(
       `ALTER TABLE "TuruuOrder" ADD COLUMN IF NOT EXISTS "paymentMethod" TEXT`
     );
@@ -196,6 +207,34 @@ const { getPrisma } = require("./lib/db");
     //  хүснэгтэд index нэмэх бол psql-ээр CONCURRENTLY ашиглана.)
     await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "TuruuOrder_orgId_status_createdAt_idx" ON "TuruuOrder"("orgId","status","createdAt")`);
     await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "StoreOrder_orgId_status_createdAt_idx" ON "StoreOrder"("orgId","status","createdAt")`);
+    // Push notification — гар утасны апп-ын Expo push token (нэг байгууллага олон төхөөрөмжтэй байж болно)
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "PushToken" (
+        "id" TEXT PRIMARY KEY,
+        "orgId" TEXT NOT NULL,
+        "token" TEXT UNIQUE NOT NULL,
+        "platform" TEXT,
+        "createdAt" TIMESTAMPTZ DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "PushToken_orgId_idx" ON "PushToken"("orgId")`);
+    // Owner session цуцлалт — нууц үг солих/сэргээхэд tokenVer++ → хуучин JWT хүчингүй болно
+    await prisma.$executeRawUnsafe(`ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "tokenVer" INTEGER NOT NULL DEFAULT 0`);
+    // Affiliate accrual-ийн найдвартай суурь — бодитоор төлсөн subscription сарын нийт тоо
+    await prisma.$executeRawUnsafe(`ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "subMonthsPaid" INTEGER NOT NULL DEFAULT 0`);
+    // Instagram cross-tenant хулгайгаас сэргийлж instagramAccountId-г UNIQUE болгоно.
+    // Эхлээд давхардлыг цэвэрлэнэ (хамгийн эрт үүссэн байгууллагад үлдээж бусдыг NULL),
+    // дараа нь unique index. Тусдаа try/catch — бусад migration-ыг зогсоохгүй.
+    try {
+      await prisma.$executeRawUnsafe(`
+        UPDATE "Organization" o SET "instagramAccountId" = NULL
+        WHERE o."instagramAccountId" IS NOT NULL AND EXISTS (
+          SELECT 1 FROM "Organization" o2
+          WHERE o2."instagramAccountId" = o."instagramAccountId" AND o2."createdAt" < o."createdAt"
+        )`);
+      await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "Organization_instagramAccountId_key" ON "Organization"("instagramAccountId")`);
+    } catch (e) { console.warn("[migration] IG unique index:", e.message); }
   } catch (e) {
     console.warn("[migration]", e.message);
   }

@@ -66,6 +66,8 @@ router.patch("/team/:id", requireOwner, async (req, res) => {
       data.passwordHash = await bcrypt.hash(String(password), 10);
     }
     const updated = await prisma.staffMember.update({ where: { id: member.id }, data, select: SAFE });
+    // Зэрэглэл/статус/нууц үг өөрчлөгдвөл кэш цэвэрлэж, ажилтны идэвхтэй session-д ТЭР ДАРУЙ мөрдүүлнэ
+    try { require("../../middleware/clientAuth").invalidateAuthCache(null, member.id); } catch { /* 60с TTL */ }
     await logAudit(prisma, req, "staff.update", member.email, data.passwordHash ? { reset: true } : { role: data.role, status: data.status });
     res.json({ member: updated });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
@@ -77,6 +79,7 @@ router.delete("/team/:id", requireOwner, async (req, res) => {
     const member = await prisma.staffMember.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
     if (!member) return res.status(404).json({ error: "Ажилтан олдсонгүй" });
     await prisma.staffMember.delete({ where: { id: member.id } });
+    try { require("../../middleware/clientAuth").invalidateAuthCache(null, member.id); } catch { /* 60с TTL */ }
     await logAudit(prisma, req, "staff.delete", member.email);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }

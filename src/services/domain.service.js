@@ -4,8 +4,15 @@
 // pending→paid шилжилтийг updateMany-гаар АТОМААР claim хийж, count===1 авсан
 // ганц хүсэлт л домэйн худалдаж авна. → polling + webhook зэрэг ажиллавал ч
 // registrar-т давхар төлбөр төлж домэйн ХОЁР удаа авахгүй.
-async function fulfillDomainOrder(prisma, deps, order) {
+async function fulfillDomainOrder(prisma, deps, order, result) {
   const { vdomains, vercel } = deps;
+
+  // Дүн баталгаажуулалт — reconcile зам өмнө дүн шалгалгүй дутуу төлбөрөөр домэйн авдаг байв.
+  const { paidEnough } = require("./payment.service");
+  if (result && !paidEnough(result, order.priceMnt)) {
+    console.warn(`[domain] order ${order.id} underpaid — paid=${result.paid_amount}, expected=${order.priceMnt}`);
+    return { status: order.status || "pending", domain: order.domain, error: "underpaid" };
+  }
 
   const claim = await prisma.domainOrder.updateMany({
     where: { id: order.id, status: "pending" },

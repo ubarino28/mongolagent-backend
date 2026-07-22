@@ -153,6 +153,19 @@ async function bumpTestChatUsage(orgId) {
   return { count: usage.count, free: usage.count <= FREE_TEST_CHAT_PER_MONTH };
 }
 
+// Нэмэгдүүлэлгүйгээр: тест чатын үнэгүй эрх (сарын) үлдсэн эсэхийг унших (/chat блоклохоос өмнө шалгах).
+async function peekTestChatFree(orgId) {
+  const prisma = getPrisma();
+  const now = new Date();
+  const month = `${now.getFullYear()}-${now.getMonth() + 1}`;
+  try {
+    const row = await prisma.turuuSettings.findUnique({ where: { orgId_key: { orgId, key: "test_chat_usage" } } });
+    let count = 0;
+    if (row) { try { const p = JSON.parse(row.value); if (p && p.month === month) count = p.count || 0; } catch { /* reset */ } }
+    return count < FREE_TEST_CHAT_PER_MONTH;
+  } catch { return true; } // алдаа → блоклохгүй
+}
+
 // ─── Заавар туслах AI-гийн сарын хязгаар ─────────────────────────────────────
 // Заавар туслах (app + website ХОЁУЛАА энэ endpoint-ыг дуудна) org тус бүр сард
 // дээд тал нь 50 message. TuruuSettings-д хадгална, сар солигдвол автомат reset.
@@ -200,7 +213,7 @@ async function bumpAssistantUsage(orgId) {
 
 module.exports = {
   FREE_TEST_CHAT_PER_MONTH, PDF_IMPORT_COST, EXCEL_IMPORT_COST, TOPUP_KEY,
-  incrementMessageUsedBy, bumpTestChatUsage, isOrgExpired,
+  incrementMessageUsedBy, bumpTestChatUsage, peekTestChatFree, isOrgExpired,
   getTopupRemaining, setTopupRemaining, addTopupCredits, getQuotaStatus, markQuotaNotice,
   ASSISTANT_MONTHLY_LIMIT, getAssistantUsage, bumpAssistantUsage,
 };

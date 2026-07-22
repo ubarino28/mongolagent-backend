@@ -72,11 +72,18 @@ router.post("/facebook/data-deletion", delLimiter, async (req, res) => {
     setImmediate(async () => {
       try {
         const result = await erasePsid(prisma, psid);
+        // ҮНЭНЧ ТӨЛӨВ: Meta-гийн signed_request.user_id нь app-scoped (ASID), харин бид page-scoped
+        // (PSID)-ээр хадгалдаг тул Messenger хэрэглэгчид таарахгүй байж болзошгүй. Бодитоор мөр
+        // устсан/нэргүйжсэн үед л "completed"; үгүй бол "manual" (худал "устгасан" гэж хэлэхгүй) +
+        // эзэнд мэдэгдэж гараар шалгуулна.
+        const affected = Object.values(result.deleted || {}).reduce((s, n) => s + (Number(n) || 0), 0)
+          + Object.values(result.anonymized || {}).reduce((s, n) => s + (Number(n) || 0), 0);
+        const status = affected > 0 ? "completed" : "manual";
         await prisma.$executeRawUnsafe(
-          `UPDATE "DataDeletionRequest" SET "status"='completed', "result"=$2::jsonb, "completedAt"=now() WHERE "code"=$1`,
-          code, JSON.stringify(result)
+          `UPDATE "DataDeletionRequest" SET "status"=$3, "result"=$2::jsonb, "completedAt"=now() WHERE "code"=$1`,
+          code, JSON.stringify(result), status
         );
-        console.log(`[privacy] FB data deletion гүйцэтгэв: ${code}`);
+        console.log(`[privacy] FB data deletion ${status} (${affected} rows): ${code}`);
       } catch (e) {
         console.error("[privacy] deletion алдаа:", e && e.message);
         await prisma.$executeRawUnsafe(
@@ -104,6 +111,7 @@ router.get("/data-deletion/:code", delLimiter, async (req, res) => {
 
   const label = !row ? "Хүсэлт олдсонгүй"
     : row.status === "completed" ? "Биелэгдсэн — таны мэдээллийг устгасан"
+    : row.status === "manual" ? "Хүсэлт хүлээн авсан — гараар шалгаж боловсруулж байна"
     : row.status === "failed" ? "Алдаа гарсан — бидэнтэй холбогдоно уу"
     : "Хүлээгдэж байна";
 

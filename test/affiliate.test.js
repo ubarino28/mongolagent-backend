@@ -142,3 +142,22 @@ test("getBalance: комисс байхгүй бол бүх 0 (сөрөг бол
   const b = await getBalance(prisma, "aff");
   assert.deepStrictEqual(b, { total: 0, withdrawn: 0, available: 0 });
 });
+
+// Phase 4 (#8): subMonthsPaid нь accrual-ыг бодит төлбөрөөр хязгаарлана —
+// завсарлаад дахин сунгахад төлөөгүй завсрын сарууд комисс авахгүй.
+test("accrueForClient: subMonthsPaid=2 → зөвхөн 2 сар accrue (subscriptionEndsAt 4 сар хамарсан ч)", async () => {
+  const created = [];
+  const prisma = {
+    organization: { findUnique: async () => ({ id: "aff" }) },
+    affiliateCommission: { create: async ({ data }) => { created.push(data.monthIndex); return data; } },
+  };
+  const referredAt = new Date(Date.now() - 5 * 30 * DAY); // 5 сарын өмнө урьсан
+  const client = {
+    id: "c1", referredBy: "aff", referredAt,
+    subscriptionEndsAt: new Date(Date.now() + 100 * DAY), // огт дуусаагүй (олон сар хамарна)
+    subPerMonth: 99900, subMonthsPaid: 2, // гэхдээ ЗӨВХӨН 2 сар бодитоор төлсөн
+  };
+  const n = await accrueForClient(prisma, client);
+  assert.strictEqual(n, 2);
+  assert.deepStrictEqual(created, [1, 2]);
+});
