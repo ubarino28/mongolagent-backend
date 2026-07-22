@@ -88,9 +88,38 @@ router.get("/profile/facebook/callback", async (req, res) => {
     const pagesRes = await axios.get("https://graph.facebook.com/v19.0/me/accounts", {
       params: { access_token: userToken, fields: "id,name,access_token,category,picture" },
     });
-    const pages = pagesRes.data.data || [];
+    let pages = pagesRes.data.data || [];
 
-    // 0 page ирвэл ЯАГААД гэдгийг оношилж, тодорхой алдаа буцаана (мерчантад ойлгомжтой заавар өгөх).
+    // /me/accounts нь зөвхөн ШУУД АДМИН хуудсыг буцаадаг — Business Portfolio-оор удирддаг
+    // хуудсыг буцаадаггүй. Facebook Login for Business-д олгосон БҮХ хуудасны ID нь token-ы
+    // granular_scopes-д байдаг тул /me/accounts хоосон бол тэндээс нөхөж татна (business_management эрхгүйгээр).
+    if (pages.length === 0 && process.env.FB_APP_ID && process.env.FB_APP_SECRET) {
+      try {
+        const dbg = await axios.get("https://graph.facebook.com/v19.0/debug_token", {
+          params: { input_token: userToken, access_token: `${process.env.FB_APP_ID}|${process.env.FB_APP_SECRET}` },
+        });
+        const gscopes = dbg.data?.data?.granular_scopes || [];
+        const pageIds = new Set();
+        for (const gs of gscopes) {
+          if (["pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement"].includes(gs.scope)) {
+            (gs.target_ids || []).forEach((id) => pageIds.add(String(id)));
+          }
+        }
+        const fetched = await Promise.all([...pageIds].map(async (pid) => {
+          try {
+            const r = await axios.get(`https://graph.facebook.com/v19.0/${pid}`, {
+              params: { access_token: userToken, fields: "id,name,access_token,category,picture" },
+            });
+            return r.data?.access_token ? r.data : null; // зөвхөн page token авч чадсаныг авна
+          } catch { return null; }
+        }));
+        pages = fetched.filter(Boolean);
+      } catch (e) {
+        console.error("[FB OAuth] granular_scopes fallback error:", e.response?.data || e.message);
+      }
+    }
+
+    // /me/accounts БОЛОН granular_scopes хоёуланд 0 бол — ЯАГААД гэдгийг оношилж тодорхой алдаа буцаана.
     if (pages.length === 0) {
       let granted = [];
       try {
