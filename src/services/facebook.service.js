@@ -55,6 +55,31 @@ async function getUserProfile(psid, pageToken, platform = "facebook") {
   }
 }
 
+// Page-ийг апп-ын webhook-д subscribe хийнэ — мессеж/postback event-ийг хүлээн авахын тулд.
+// pages_manage_metadata эрх шаардлагатай. Page холбох үед автомат дуудагдана (гараар Meta
+// dashboard орох шаардлагагүй болно). Instagram мессеж ч мөн энэ page subscription-аар ирдэг.
+async function subscribePageWebhooks(pageId, pageToken) {
+  const token = pageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+  if (!token || !pageId) return { ok: false, error: "pageId/token алга" };
+  try {
+    const { data } = await axios.post(
+      `https://graph.facebook.com/v19.0/${encodeURIComponent(pageId)}/subscribed_apps`,
+      null,
+      {
+        params: {
+          subscribed_fields: "messages,messaging_postbacks,message_echoes",
+          access_token: token,
+        },
+        timeout: 8000,
+      }
+    );
+    return { ok: data?.success === true || !!data, data };
+  } catch (err) {
+    console.error("[FB] subscribe webhooks error:", err.response?.data || err.message);
+    return { ok: false, error: err.response?.data?.error?.message || err.message };
+  }
+}
+
 function splitMessage(text, maxLen) {
   if (text.length <= maxLen) return [text];
   const parts = [];
@@ -71,4 +96,4 @@ function splitMessage(text, maxLen) {
   return parts.filter(Boolean);
 }
 
-module.exports = { sendText, sendTypingOn, getUserProfile };
+module.exports = { sendText, sendTypingOn, getUserProfile, subscribePageWebhooks };
