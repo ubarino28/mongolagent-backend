@@ -332,6 +332,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   if (orgId) {
     const { getOrgPlan, planAllows } = require("../lib/planFeatures");
     const plan = await getOrgPlan(orgId);
+    // Захиалга/QPay/цаг tool: зөвхөн план ≥ growth-д нээгдэнэ (starter → хасна)
     if (!planAllows(plan, "orders")) {
       activeTools = activeTools.filter((t) => !GROWTH_ONLY_TOOLS.has(t.function.name));
     }
