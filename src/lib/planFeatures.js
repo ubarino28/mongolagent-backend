@@ -64,7 +64,34 @@ function requireFeature(feature) {
   };
 }
 
+// Org ТӨЛБӨРТЭЙ вэбсайттай (Store, webPlan trial БИШ) эсэх. Вэбсайт авсан хэрэглэгчид
+// захиалга/QPay chatbot-ыг "бэлэг" болгож нээхэд ашиглана (AI-agent планаас хамааралгүй).
+async function hasActiveWebsite(orgId) {
+  if (!orgId) return false;
+  try {
+    const s = await getPrisma().store.findUnique({ where: { orgId }, select: { webPlan: true } });
+    // Зөвхөн ТӨЛБӨРТЭЙ идэвхтэй вэбсайт (webPlan="active") — trial/expired тооцохгүй.
+    return s?.webPlan === "active";
+  } catch { return false; }
+}
+
+// Захиалга/QPay chatbot-ын gate: план ≥ growth ЭСВЭЛ төлбөртэй вэбсайттай бол нээгдэнэ.
+function requireOrdersFeature() {
+  return async (req, res, next) => {
+    try {
+      const orgId = req.org?.orgId;
+      const plan = await getOrgPlan(orgId);
+      if (planAllows(plan, "orders") || await hasActiveWebsite(orgId)) return next();
+      return res.status(403).json({
+        error: "Захиалга авах боломж Growth багц эсвэл Вэбсайт багцаас нээгдэнэ. Багцаа дээшлүүлээрэй.",
+        code: "PLAN_REQUIRED", requiredPlan: "growth", feature: "orders",
+      });
+    } catch { return next(); }
+  };
+}
+
 module.exports = {
   FEATURE_MIN_PLAN, KB_LIMIT, PLAN_LABEL,
   planAllows, kbLimit, getOrgPlan, invalidatePlan, requireFeature,
+  hasActiveWebsite, requireOrdersFeature,
 };

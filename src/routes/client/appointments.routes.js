@@ -3,13 +3,19 @@
 // Auth-ийг эцэг router (client.routes.js) clientAuthMiddleware-ээр тавьсан тул req.org бэлэн.
 const express = require("express");
 const { getPrisma } = require("../../lib/db");
+const { requireFeature } = require("../../lib/planFeatures");
 
 const router = express.Router();
+
+// Цаг захиалга бол Growth+ боломж — starter багцад түгжинэ. АНХААР: энэ модуль эцэг router-т
+// PATH-ГҮЙ mount хийгддэг тул router.use(gate) хийвэл БҮХ client endpoint рүү алдагдана.
+// Тиймээс gate-ийг route ТУС БҮРД нэмнэ (доор appt тогтмолоор).
+const appt = requireFeature("appointments");
 
 // ─── STAFF ───────────────────────────────────────────────────────────────────
 
 // GET /client/staff
-router.get("/staff", async (req, res) => {
+router.get("/staff", appt, async (req, res) => {
   try {
     const prisma = getPrisma();
     const staff = await prisma.turuuStaff.findMany({
@@ -21,7 +27,7 @@ router.get("/staff", async (req, res) => {
 });
 
 // POST /client/staff
-router.post("/staff", async (req, res) => {
+router.post("/staff", appt, async (req, res) => {
   try {
     const { name, services, workDays, workStart, workEnd, bufferMinutes } = req.body;
     if (!name) return res.status(400).json({ error: "name шаардлагатай" });
@@ -42,7 +48,7 @@ router.post("/staff", async (req, res) => {
 });
 
 // PUT /client/staff/:id
-router.put("/staff/:id", async (req, res) => {
+router.put("/staff/:id", appt, async (req, res) => {
   try {
     const prisma = getPrisma();
     const existing = await prisma.turuuStaff.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
@@ -65,7 +71,7 @@ router.put("/staff/:id", async (req, res) => {
 });
 
 // DELETE /client/staff/:id
-router.delete("/staff/:id", async (req, res) => {
+router.delete("/staff/:id", appt, async (req, res) => {
   try {
     const prisma = getPrisma();
     const existing = await prisma.turuuStaff.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
@@ -92,7 +98,7 @@ function buildSlots(workStart, workEnd, durationMinutes) {
 }
 
 // GET /client/availability?date=2026-06-20&staffId=xxx
-router.get("/availability", async (req, res) => {
+router.get("/availability", appt, async (req, res) => {
   try {
     const { date, staffId } = req.query;
     if (!date || !staffId) return res.status(400).json({ error: "date, staffId шаардлагатай" });
@@ -132,7 +138,7 @@ router.get("/availability", async (req, res) => {
 // ─── APPOINTMENTS ─────────────────────────────────────────────────────────────
 
 // GET /client/appointments
-router.get("/appointments", async (req, res) => {
+router.get("/appointments", appt, async (req, res) => {
   try {
     const { date, status, page = 1 } = req.query;
     const take = 20;
@@ -159,7 +165,7 @@ router.get("/appointments", async (req, res) => {
 });
 
 // PUT /client/appointments/:id/status
-router.put("/appointments/:id/status", async (req, res) => {
+router.put("/appointments/:id/status", appt, async (req, res) => {
   try {
     const { status } = req.body;
     if (!["PENDING", "CONFIRMED", "CANCELLED", "COMPLETED"].includes(status)) return res.status(400).json({ error: "status буруу" });
@@ -211,8 +217,8 @@ async function handleSchedule(req, res) {
     res.json({ slots, staffName: staff.name, offDay: false });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 }
-router.get("/schedule", handleSchedule);
-router.get("/staff/:id/schedule", handleSchedule);
+router.get("/schedule", appt, handleSchedule);
+router.get("/staff/:id/schedule", appt, handleSchedule);
 
 // POST /client/schedule/block — тухайн мастерын цагийг гараар хаана
 // POST /client/staff/:id/block  (backwards-compatible)
@@ -239,11 +245,11 @@ async function handleBlock(req, res) {
     res.json(block);
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 }
-router.post("/schedule/block", handleBlock);
-router.post("/staff/:id/block", handleBlock);
+router.post("/schedule/block", appt, handleBlock);
+router.post("/staff/:id/block", appt, handleBlock);
 
 // DELETE /client/appointments/:id — зөвхөн BLOCKED цагийг устгана (нээнэ)
-router.delete("/appointments/:id", async (req, res) => {
+router.delete("/appointments/:id", appt, async (req, res) => {
   try {
     const prisma = getPrisma();
     const appt = await prisma.turuuAppointment.findFirst({ where: { id: req.params.id, orgId: req.org.orgId } });
@@ -255,7 +261,7 @@ router.delete("/appointments/:id", async (req, res) => {
 });
 
 // GET /client/appointment-revenue — цаг захиалгын орлого
-router.get("/appointment-revenue", async (req, res) => {
+router.get("/appointment-revenue", appt, async (req, res) => {
   try {
     const prisma = getPrisma();
     const orgId = req.org.orgId;
