@@ -11,7 +11,7 @@ const { clientAuthMiddleware, blockIfExpired } = require("../middleware/clientAu
 const { requireFeature, getOrgPlan, kbLimit, planAllows, PLAN_LABEL } = require("../lib/planFeatures");
 const { logAudit } = require("../services/audit.service");
 const { saveLead, saveConsultation, saveOrder } = require("../services/lead.service");
-const { sendText } = require("../services/facebook.service");
+const { sendText, subscribePageWebhooks } = require("../services/facebook.service");
 const { refreshChatProfile } = require("../services/contact.service");
 const { broadcastInbox } = require("../services/realtime.service");
 const storeSync = require("../services/storeSync.service");
@@ -201,7 +201,14 @@ router.post("/profile/facebook/select-page", requireOwner, async (req, res) => {
       if (e.code === "P2002") return res.status(409).json({ error: "Энэ Facebook хуудас/Instagram өөр бүртгэлд холбогдсон байна" });
       throw e;
     }
-    res.json({ ok: true, pageName });
+
+    // Page-ийг апп-ын webhook-д АВТОМАТ subscribe хийнэ — ингэснээр мессеж backend руу ирж AI
+    // хариулна (өмнө гараар Meta dashboard-д subscribe хийх шаардлагатай байсан). Instagram
+    // мессеж ч мөн энэ subscription-аар ирнэ. Амжилтгүй болвол холболтыг зогсоохгүй — зөвхөн анхааруулна.
+    const sub = await subscribePageWebhooks(pageId, pageToken);
+    if (!sub.ok) console.warn("[select-page] webhook subscribe амжилтгүй:", sub.error);
+
+    res.json({ ok: true, pageName, subscribed: sub.ok });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 

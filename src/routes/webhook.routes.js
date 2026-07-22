@@ -179,8 +179,9 @@ router.post("/", (req, res) => {
         }
 
         // Харилцагчийн нэр/зургийг Graph API-аас (эхний удаа эсвэл 6ц хэтэрсэн бол) шинэчилнэ.
+        // Instagram эсэхийг дамжуулна → зөв профайл талбар + чатыг platform="instagram" болгож шошголно.
         // Fire-and-forget — хариу илгээхийг удаашруулахгүй. processMessage чатыг үүсгэсэн тул row байна.
-        if (orgId) refreshChatProfile(orgId, psid, { token }).catch(() => {});
+        if (orgId) refreshChatProfile(orgId, psid, { token, platform: isInstagram ? "instagram" : "facebook" }).catch(() => {});
       }
     }
   });
