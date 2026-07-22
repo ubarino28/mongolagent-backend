@@ -63,15 +63,28 @@ async function saveOrder({ psid, orgId = null, customerName, customerPhone, cust
     notes = notes ? `${notes} | ${suffix}` : suffix;
   }
 
-  // Idempotency: AI ижил захиалгад save_order-ыг давтан дуудвал (жишээ нь "дансаар төлье" гэсний дараа,
-  // эсвэл хэрэглэгч хожим дахин "QPay явуулаач" гэвэл) ижил psid+totalAmount-тай NEW захиалга ХЭДИЙД Ч
-  // байсан шинэ захиалга үүсгэхгүй — зөвхөн 48 цагийн auto-cancel-аар (src/index.js) хугацаа дуусна.
+  // Idempotency: AI ижил захиалгыг давтан дуудвал (QR дахин илгээх г.м) шинэ захиалга үүсгэхгүй.
+  // ГЭХДЭЭ зөвхөн totalAmount биш, БАРААНЫ БҮРДЭЛ (нэр+тоо) мөн таарах ёстой — эс тэгвэл ижил
+  // дүнтэй ӨӨР 2 захиалга (жишээ нь 2 удаагийн 50,000₮) нэгдэж, 2 дахь нь алдагддаг байв (#20).
+  const fingerprint = (arr) => Array.isArray(arr) ? arr.map((i) => `${(i.name || "").trim()}:${i.qty}`).sort().join("|") : "";
   if (psid) {
-    const recent = await prisma.turuuOrder.findFirst({
+    const fp = fingerprint(items);
+    const recentList = await prisma.turuuOrder.findMany({
       where: { psid, orgId, status: "NEW", totalAmount },
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: "desc" }, take: 10,
     });
-    if (recent) return { ...recent, duplicate: true };
+    const dup = recentList.find((o) => fingerprint(o.items) === fp);
+    if (dup) return { ...dup, duplicate: true };
+  }
+
+  // #18: барааны мөрийн нийлбэрийг сервер талд бодож, бүртгэсэн дүнгээс ДУТУУ бол эзэнд
+  // анхааруулна (LLM тооцооллын алдаа / prompt-injection-оор дутуу дүн ороход хүн шалгана).
+  let amountWarning = null;
+  if (Array.isArray(items) && items.length > 0) {
+    const expected = items.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
+    if (expected > 0 && Number(totalAmount) < expected - 1) {
+      amountWarning = `Барааны нийлбэр ₮${expected.toLocaleString()} > бүртгэсэн дүн ₮${Number(totalAmount).toLocaleString()} — дутуу байж болзошгүй, шалгана уу`;
+    }
   }
 
   const order = await prisma.turuuOrder.create({
@@ -85,6 +98,7 @@ async function saveOrder({ psid, orgId = null, customerName, customerPhone, cust
   await notifyOwner(orgId, "Шинэ захиалга", {
     Хэрэглэгч: customerName, Утас: customerPhone, Хаяг: deliveryAddress,
     Бараа: itemsSummary, "Нийт дүн": `₮${totalAmount?.toLocaleString()}`, Тэмдэглэл: notes,
+    ...(amountWarning ? { "⚠️ Анхаар": amountWarning } : {}),
   }, { label: "Захиалгаа харах", path: "/orders" });
   return order;
 }
@@ -100,12 +114,27 @@ async function saveAppointment({ psid, orgId = null, staffId, staffName, service
     if (recent) return { ...recent, duplicate: true };
   }
 
-  // Давхар захиалга шалгах: тухайн мастерын тухайн цагт өөр захиалга байвал хориглоно
-  const conflict = await prisma.turuuAppointment.findFirst({
-    where: { staffId, date, timeSlot, status: { not: "CANCELLED" } },
-  });
-  if (conflict) {
-    throw new Error(`Уучлаарай, ${timeSlot} цаг аль хэдийн захиалагдсан байна. Өөр цаг сонгоно уу.`);
+  // Давхар захиалга шалгах — ЯГ ижил timeSlot биш, ХУГАЦААНЫ ДАВХЦАЛ (үргэлжлэх хугацаагаар).
+  // (Өмнө зөвхөн timeSlot тэнцэхийг шалгадаг тул 14:00 (90мин) ба 14:30 (30мин) давхардлыг
+  //  илрүүлэлгүй нэг мастерыг давхар захиалдаг байв.)
+  const toMin = (t) => { const m = String(t || "").match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+  const newStart = toMin(timeSlot);
+  if (newStart != null) {
+    const newEnd = newStart + (Number(durationMinutes) || 30);
+    const sameDay = await prisma.turuuAppointment.findMany({
+      where: { staffId, date, status: { not: "CANCELLED" } },
+      select: { timeSlot: true, durationMinutes: true },
+    });
+    const overlap = sameDay.some((a) => {
+      const s = toMin(a.timeSlot); if (s == null) return false;
+      const e = s + (Number(a.durationMinutes) || 30);
+      return newStart < e && s < newEnd; // интервал давхцал
+    });
+    if (overlap) throw new Error(`Уучлаарай, ${timeSlot} орчмын цаг аль хэдийн захиалагдсан байна. Өөр цаг сонгоно уу.`);
+  } else {
+    // timeSlot-г задалж чадсангүй — хуучин яг таарах шалгалтад найдна
+    const conflict = await prisma.turuuAppointment.findFirst({ where: { staffId, date, timeSlot, status: { not: "CANCELLED" } } });
+    if (conflict) throw new Error(`Уучлаарай, ${timeSlot} цаг аль хэдийн захиалагдсан байна. Өөр цаг сонгоно уу.`);
   }
 
   const appt = await prisma.turuuAppointment.create({

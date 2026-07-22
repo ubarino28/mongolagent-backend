@@ -78,7 +78,11 @@ async function accrueForClient(prisma, client, now = new Date()) {
   if (!affiliate) return 0;
 
   const elapsedMonths = Math.floor((now.getTime() - new Date(referredAt).getTime()) / MONTH_MS);
-  const upto = Math.min(elapsedMonths, COMMISSION_MONTHS); // хамгийн ихдээ 12 сар
+  // БОДИТ төлсөн сараар хязгаарлана. (Өмнө зөвхөн subscriptionEndsAt хүрсэн эсэхээр шалгадаг тул
+  //  клиент завсарлаад дахин сунгахад subscriptionEndsAt урагшилж, завсрын ТӨЛӨӨГҮЙ саруудад ч
+  //  комисс бодогддог байв. subMonthsPaid нь applySubscriptionPayment-д атомикаар нэмэгддэг бодит тоо.)
+  const paidCap = client.subMonthsPaid != null ? Math.max(0, Number(client.subMonthsPaid) || 0) : COMMISSION_MONTHS;
+  const upto = Math.min(elapsedMonths, COMMISSION_MONTHS, paidCap); // хамгийн ихдээ 12 сар, бодит төлбөрөөр хязгаарлагдсан
   if (upto < 1) return 0;
 
   // ЗАМЕЧАНИ: комиссын суурь нь клиентийн ОДООГИЙН subPerMonth (сүүлийн төлбөрийн үнэ).
@@ -108,7 +112,7 @@ async function runAccrual(now = new Date()) {
   const prisma = getPrisma();
   const clients = await prisma.organization.findMany({
     where: { referredBy: { not: null }, referredAt: { not: null } },
-    select: { id: true, referredBy: true, referredAt: true, subscriptionEndsAt: true, subPerMonth: true },
+    select: { id: true, referredBy: true, referredAt: true, subscriptionEndsAt: true, subPerMonth: true, subMonthsPaid: true },
   });
   let total = 0;
   for (const c of clients) {

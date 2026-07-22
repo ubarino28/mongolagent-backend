@@ -11,6 +11,7 @@ function cachedSystemPrompt(isNew, orgId, hasImage = false) {
 }
 function invalidatePrompt(orgId) { cache.del(`prompt:${orgId}`); }
 const { getHistory, saveHistory, isNewConversation } = require("../lib/history");
+const { broadcastInbox } = require("./realtime.service");
 const { saveLead, saveConsultation, saveOrder, saveAppointment } = require("./lead.service");
 const { getPrisma } = require("../lib/db");
 const storeSync = require("./storeSync.service");
@@ -150,7 +151,9 @@ async function searchKnowledge(orgId, query) {
   try {
     const prisma = getPrisma();
     const items = await prisma.turuuKnowledge.findMany({
-      where: { orgId: orgId || undefined, active: true },
+      // orgId ?? null — orgId null үед `|| undefined` нь талбарыг ОРХИЖ бүх байгууллагын
+      // KB-г буцаадаг байсан (cross-tenant задрал). ?? null → `orgId IS NULL` болж зөв scoped.
+      where: { orgId: orgId ?? null, active: true },
       select: { question: true, answer: true, category: true, variants: true, attributes: true },
     });
 
@@ -272,25 +275,60 @@ function queuedProcessMessage(psid, userText, orgId, imageUrl = null) {
   });
 }
 
+// AI унтраалттай/handoff үед хэрэглэгчийн ирсэн мессежийг зөвхөн түүхэнд НЭМНЭ (AI хариу үүсгэхгүй) —
+// ингэснээр гар горимд ярианы бичвэр дашбордын Inbox-д харагдана. (Өмнө нь мессежийг хадгалахаас
+// ӨМНӨ return хийдэг тул гар горимд хэрэглэгчийн бичсэн зүйл Inbox-д огт харагддаггүй байв.)
+async function appendUserMessage(psid, userText, orgId = null, imageUrl = null) {
+  try {
+    const content = imageUrl ? (userText || "[ЗУРАГ ИЛГЭЭСЭН]") : userText;
+    if (!content) return;
+    const hist = await getHistory(psid, orgId);
+    await saveHistory(psid, [...hist, { role: "user", content }], orgId);
+    broadcastInbox(orgId, psid); // realtime: дашбордад агшин зуур харуулна
+  } catch (e) { console.error("[ai] appendUserMessage:", e && e.message); }
+}
+
 async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   const prisma = getPrisma();
 
-  // Block + aiPaused + handoff шалгах
+  // Block + AI унтраалт + handoff шалгах.
+  // AI унтраалттай/handoff үед ч хэрэглэгчийн мессежийг ХАДГАЛНА, зөвхөн AI хариу ИЛГЭЭХГҮЙ.
   try {
     const chatRecord = await prisma.turuuChat.findFirst({ where: { psid, orgId } });
-    if (chatRecord?.blocked) return null;
+    if (chatRecord?.blocked) return null; // блоклосон — юу ч хийхгүй (мессеж ч хадгалахгүй)
+
+    // Гараар AI унтраасан — ТОГТВОРТОЙ (persistent): эзэн гараар буцааж асаатал бот хариулахгүй.
+    // (Өмнө updatedAt-аар 10 минутын дараа ӨӨРӨӨ асдаг байсныг болиулав — toggle тогтвортой болов.)
     if (chatRecord?.aiPaused) {
-      const pauseElapsed = chatRecord.updatedAt ? Date.now() - new Date(chatRecord.updatedAt).getTime() : Infinity;
-      if (pauseElapsed < 10 * 60 * 1000) return null;
-      await prisma.turuuChat.update({ where: { id: chatRecord.id }, data: { aiPaused: false } });
+      await appendUserMessage(psid, userText, orgId, imageUrl);
+      return null;
     }
+
+    // Хүн хүссэн (handoff) — хүнд 10 минут өгч, дараа нь AI автоматаар үргэлжилнэ.
     if (chatRecord?.handoffRequested) {
       const elapsed = chatRecord.handoffAt ? Date.now() - new Date(chatRecord.handoffAt).getTime() : Infinity;
-      if (elapsed < 10 * 60 * 1000) return null; // 10 минут болоогүй — AI хариулахгүй
+      if (elapsed < 10 * 60 * 1000) {
+        await appendUserMessage(psid, userText, orgId, imageUrl);
+        return null; // 10 минут болоогүй — AI хариулахгүй, гэхдээ мессежийг хадгална
+      }
       // 10 минут өнгөрсөн — auto-clear, AI буцаж асна
       await prisma.turuuChat.update({ where: { id: chatRecord.id }, data: { handoffRequested: false, handoffAt: null } });
     }
   } catch { /* proceed */ }
+
+  // history снапшот — ЭНЭ ээлжийн мессежийн ӨМНӨХ төлөв. prompt / isNew / доорх бүх saveHistory
+  // энэ нэг снапшотыг дахин ашиглана (давхар хадгалахаас сэргийлнэ).
+  const history = await getHistory(psid, orgId);
+  const isNew = !Array.isArray(history) || history.length === 0;
+
+  // Immediate-save + realtime: хэрэглэгчийн мессежийг ШУУД хадгалж дашбордын Inbox-д АГШИН ЗУУР
+  // харуулна (AI бодож дуустал хүлээхгүй). Мөн AI хариулахгүй тохиолдолд (квот/эрх дуусах г.м)
+  // ч мессеж заавал бүртгэгдэнэ. AI хариу дараа нь энэ дээр нэмэгдэнэ.
+  const historyUserContent = imageUrl ? (userText || "[ЗУРАГ ИЛГЭЭСЭН]") : userText;
+  try {
+    await saveHistory(psid, [...history, { role: "user", content: historyUserContent }], orgId);
+    broadcastInbox(orgId, psid);
+  } catch { /* non-blocking */ }
 
   // Анти-спам/cost-abuse — нэг хэрэглэгч (psid) хэт хурдан спам бичвэл OpenAI дуудахгүй чимээгүй өнгөрнө
   if (!convAllowed(orgId, psid)) return null;
@@ -311,18 +349,15 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
   if (orgId && !imageUrl) {
     const cached = await findExactMatch(orgId, userText);
     if (cached) {
-      const hist = await getHistory(psid, orgId);
-      await saveHistory(psid, [...hist, { role: "user", content: userText }, { role: "assistant", content: cached }], orgId);
+      await saveHistory(psid, [...history, { role: "user", content: userText }, { role: "assistant", content: cached }], orgId);
+      broadcastInbox(orgId, psid); // realtime: ботын хариу гарч ирэхэд шинэчилнэ
       await incrementMessageUsed(orgId, prisma);
       return cached;
     }
   }
 
-  const [isNew, history, aiSettings] = await Promise.all([
-    isNewConversation(psid, orgId),
-    getHistory(psid, orgId),
-    loadAISettings(orgId),
-  ]);
+  // isNew, history-г дээр (immediate-save-ийн өмнө) снапшотоос тодорхойлсон — дахин татахгүй.
+  const aiSettings = await loadAISettings(orgId);
 
   let systemPrompt = await cachedSystemPrompt(isNew, orgId, !!imageUrl);
   // Бизнес төрлөөр tool жагсаалтыг шүүнэ — хэрэггүй tool илгээхгүй (токен хэмнэнэ)
@@ -402,6 +437,11 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
 
     for (const toolCall of toolCalls) {
       const args = JSON.parse(toolCall.function.arguments);
+      // АЮУЛГҮЙ БАЙДАЛ: LLM-ийн гаргасан аргументаас итгэлт танигчдыг ЗААВАЛ устгана.
+      // (save_*({ psid, orgId, ...args }) дээр args сүүлд spread хийгддэг тул args доторх
+      //  orgId/psid жинхэнэ утгыг дарж, prompt injection-оор ӨӨР tenant-д бичих боломж
+      //  үүсдэг байв. Эдгээр нь ямар ч tool schema-д байдаггүй тул устгахад аюулгүй.)
+      delete args.orgId; delete args.psid;
 
       if (toolCall.function.name === "save_lead") {
         await saveLead({ psid, orgId, ...args });
@@ -429,25 +469,33 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         if (orgId && order?.id && !order.duplicate) {
           try {
             const orderItems = Array.isArray(args.items) ? args.items : [];
-            // KB-г ЛООП-ИЙН ӨМНӨ нэг л удаа тат (өмнө бараа бүрд дахин татдаг байсан = N+1).
-            const kbItems = await prisma.turuuKnowledge.findMany({ where: { orgId, active: true }, select: { id: true, question: true, variants: true } });
-            // KB бүрд хасалтыг НЭГТГЭНЭ (нэг захиалгад ижил барааны 2 variant орвол дарж бичихээс сэргийлнэ).
-            const work = new Map(); // kbId -> { variants (ажлын хувь) }
+            // KB-г нэг л удаа тат (нэр→KB тааруулахад). Нөөц хасалтыг KB-ийн ID-гаар БҮЛЭГЛЭНЭ.
+            const kbItems = await prisma.turuuKnowledge.findMany({ where: { orgId, active: true }, select: { id: true, question: true } });
+            const perKb = new Map(); // kbId -> [items]
             for (const it of orderItems) {
               if (!it.name || !it.qty) continue;
               const match = kbItems.find((k) => normalizeText(k.question).includes(normalizeText(it.name)) || normalizeText(it.name).includes(normalizeText(k.question)));
-              if (!match || !Array.isArray(match.variants) || match.variants.length === 0) continue;
-              if (!work.has(match.id)) work.set(match.id, match.variants.map((v) => ({ ...v })));
-              const variants = work.get(match.id);
-              for (const v of variants) {
-                const colorOk = !it.color || normalizeText(v.color || "").includes(normalizeText(it.color)) || normalizeText(it.color).includes(normalizeText(v.color || ""));
-                const sizeOk = !it.size || String(v.size || "").toLowerCase() === String(it.size).toLowerCase();
-                if (colorOk && sizeOk) v.stock = Math.max(0, (v.stock || 0) - (it.qty || 1));
-              }
+              if (!match) continue;
+              if (!perKb.has(match.id)) perKb.set(match.id, []);
+              perKb.get(match.id).push(it);
             }
-            // KB тус бүрд НЭГ update + вэбсайтын Product.stock руу sync (нөөц уялдана)
-            for (const [kbId, variants] of work) {
-              await prisma.turuuKnowledge.update({ where: { id: kbId }, data: { variants } });
+            // KB мөр бүрийг FOR UPDATE-ээр түгжиж read-modify-write хийнэ — сувгууд хооронд (website
+            // vs Messenger) зэрэг захиалга JSON нөөцийг дарж бичихээс сэргийлнэ (атомик).
+            for (const [kbId, its] of perKb) {
+              await prisma.$transaction(async (tx) => {
+                await tx.$queryRawUnsafe('SELECT id FROM "TuruuKnowledge" WHERE id = $1 FOR UPDATE', kbId);
+                const kb = await tx.turuuKnowledge.findUnique({ where: { id: kbId } });
+                if (!kb || !Array.isArray(kb.variants) || kb.variants.length === 0) return;
+                const variants = kb.variants.map((v) => ({ ...v }));
+                for (const it of its) {
+                  for (const v of variants) {
+                    const colorOk = !it.color || normalizeText(v.color || "").includes(normalizeText(it.color)) || normalizeText(it.color).includes(normalizeText(v.color || ""));
+                    const sizeOk = !it.size || String(v.size || "").toLowerCase() === String(it.size).toLowerCase();
+                    if (colorOk && sizeOk) v.stock = Math.max(0, (v.stock || 0) - (it.qty || 1));
+                  }
+                }
+                await tx.turuuKnowledge.update({ where: { id: kbId }, data: { variants } });
+              });
               const fresh = await prisma.turuuKnowledge.findUnique({ where: { id: kbId } });
               if (fresh) await storeSync.syncKnowledgeToStore(orgId, fresh);
             }
@@ -523,7 +571,7 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
         // Хариулагдаагүй асуултыг DB-д хадгала
         try {
           await prisma.turuuUnanswered.create({
-            data: { orgId: orgId || "default", question: args.question, psid },
+            data: { orgId: orgId ?? null, question: args.question, psid },
           });
         } catch { /* non-blocking */ }
         toolResults.push({ tool_call_id: toolCall.id, content: JSON.stringify({ flagged: true }) });
@@ -606,7 +654,8 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
       } else if (toolCall.function.name === "reschedule_appointment") {
         try {
           const { phone, oldDate, oldTime, newDate, newTime } = args;
-          const where = { orgId, customerPhone: phone, status: { notIn: ["CANCELLED", "COMPLETED"] } };
+          // psid-ээр scoped — хэрэглэгч ЗӨВХӨН өөрийн цагийг өөрчилнө (өөр хүнийхийг биш).
+          const where = { orgId, psid, status: { notIn: ["CANCELLED", "COMPLETED"] } };
           if (oldDate) where.date = oldDate;
           if (oldTime) where.timeSlot = oldTime;
           const appt = await prisma.turuuAppointment.findFirst({ where, orderBy: { createdAt: "desc" } });
@@ -707,12 +756,10 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
       } else if (toolCall.function.name === "check_order") {
         try {
           const phone = (args.phone || "").trim();
-          const where = { orgId };
-          if (phone) {
-            where.customerPhone = phone;
-          } else {
-            where.psid = psid;
-          }
+          // ҮРГЭЛЖ хүсэгчийн psid-ээр scoped — хэрэглэгч ЗӨВХӨН өөрийн захиалгыг харна.
+          // (Өмнө дурын утсаар хайж болдог тул өөр хүний нэр/захиалга/PII-г цуглуулж болдог байв.)
+          const where = { orgId, psid };
+          if (phone) where.customerPhone = phone; // нэмэлт шүүлт (өөрийн олон захиалгаас)
           const orders = await prisma.turuuOrder.findMany({
             where,
             orderBy: { createdAt: "desc" },
@@ -779,7 +826,8 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
 
       } else if (toolCall.function.name === "cancel_reservation") {
         try {
-          const where = { orgId, customerPhone: args.phone, status: { notIn: ["CANCELLED", "COMPLETED"] } };
+          // psid-ээр scoped — хэрэглэгч ЗӨВХӨН өөрийн ширээ захиалгыг цуцална.
+          const where = { orgId, psid, status: { notIn: ["CANCELLED", "COMPLETED"] } };
           if (args.date) where.date = args.date;
           const reservation = await prisma.turuuReservation.findFirst({ where, orderBy: { createdAt: "desc" } });
           if (!reservation) {
@@ -872,8 +920,10 @@ async function processMessage(psid, userText, orgId = null, imageUrl = null) {
     } catch { /* non-blocking */ }
   }
 
-  const historyUserContent = imageUrl ? (userText || "[ЗУРАГ ИЛГЭЭСЭН]") : userText;
+  // historyUserContent дээр (immediate-save дээр) тодорхойлогдсон. Эцсийн save нь immediate-save-ыг
+  // AI хариугаар нөхөж бүрэн ярианы төлөвийг [...history, user, assistant] болгож бичнэ.
   await saveHistory(psid, [...history, { role: "user", content: historyUserContent }, { role: "assistant", content: replyText }], orgId);
+  broadcastInbox(orgId, psid); // realtime: ботын хариу гарч ирэхэд шинэчилнэ
 
   // Мессежийн квот тоолох
   if (orgId) await incrementMessageUsed(orgId, prisma);
@@ -931,8 +981,10 @@ async function processReceiptImage(psid, imageUrl, orgId = null) {
     await prisma.turuuOrder.update({ where: { id: order.id }, data: { status: "PAYMENT_SENT" } });
     replyText = `⚠️ Баримтаас ${extractedAmount.toLocaleString()}₮ танигдлаа, харин захиалгын дүн ${expected.toLocaleString()}₮ байна. Манай ажилтан шалгаж тантай холбогдоно уу 🙏`;
   } else {
-    await prisma.turuuOrder.update({ where: { id: order.id }, data: { status: "PAYMENT_SENT" } });
-    replyText = `📸 Баримтыг хүлээн авлаа! Манай ажилтан шалгаж баталгаажуулна, түр хүлээнэ үү 🙏`;
+    // Дүн ТАНИГДСАНГҮЙ (тодорхойгүй зураг эсвэл баримт биш байж магадгүй) — захиалгын статусыг
+    // ӨӨРЧЛӨХГҮЙ. (Өмнө дурын зургийг PAYMENT_SENT болгож эзэнд хуурамч "төлбөр шалгах" мэдэгдэл
+    //  цацдаг байв.) Тодорхой баримт дахин асууна.
+    replyText = `📸 Баримтын дүн тодорхой танигдсангүй. Гүйлгээний дүн харагдахуйц ТОДОРХОЙ зураг дахин илгээнэ үү 🙏`;
   }
 
   // Эзэн рүү и-мэйл мэдэгдэл — дансаар бол ҮРГЭЛЖ явуулна (QPay flow-той адил pattern)
@@ -952,6 +1004,7 @@ async function processReceiptImage(psid, imageUrl, orgId = null) {
 
   const history = await getHistory(psid, orgId);
   await saveHistory(psid, [...history, { role: "user", content: "[ТӨЛБӨРИЙН БАРИМТ ЗУРАГ ИЛГЭЭСЭН]" }, { role: "assistant", content: replyText }], orgId);
+  broadcastInbox(orgId, psid); // realtime
 
   if (orgId) await incrementMessageUsed(orgId, prisma);
 

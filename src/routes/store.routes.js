@@ -593,20 +593,26 @@ router.put("/products/:id", async (req, res) => {
 
     const b = req.body;
     const data = {};
-    if (b.name !== undefined) data.name = b.name;
-    if (b.description !== undefined) data.description = b.description;
-    if (b.price !== undefined) data.price = Number(b.price) || 0;
+    // KB-тэй холбоотой бараа (knowledgeId != null): нэр/тайлбар/үнэ/зураг/variant/нөөц/ангилал/active
+    // нь мэдлэгийн сангаас DERIVE хийгддэг тул эндээс засвал дараагийн sync-д ДАРАГДАН алга болно.
+    // Тиймээс эдгээрийг хүлээж авахгүй — зөвхөн Product-only талбар (compareAtPrice/sku/sortOrder) засна.
+    const synced = product.knowledgeId != null;
+    if (!synced) {
+      if (b.name !== undefined) data.name = b.name;
+      if (b.description !== undefined) data.description = b.description;
+      if (b.price !== undefined) data.price = Number(b.price) || 0;
+      if (b.images !== undefined) data.images = Array.isArray(b.images) ? b.images : [];
+      if (b.variants !== undefined) data.variants = Array.isArray(b.variants) ? b.variants : [];
+      if (b.stock !== undefined) data.stock = Number(b.stock) || 0;
+      if (b.category !== undefined) data.category = b.category;
+      if (b.active !== undefined) data.active = !!b.active;
+    }
     if (b.compareAtPrice !== undefined) data.compareAtPrice = b.compareAtPrice != null ? Number(b.compareAtPrice) : null;
-    if (b.images !== undefined) data.images = Array.isArray(b.images) ? b.images : [];
-    if (b.variants !== undefined) data.variants = Array.isArray(b.variants) ? b.variants : [];
-    if (b.stock !== undefined) data.stock = Number(b.stock) || 0;
     if (b.sku !== undefined) data.sku = b.sku;
-    if (b.category !== undefined) data.category = b.category;
-    if (b.active !== undefined) data.active = !!b.active;
     if (b.sortOrder !== undefined) data.sortOrder = Number(b.sortOrder);
 
     const updated = await prisma.product.update({ where: { id: product.id }, data });
-    res.json({ product: updated });
+    res.json({ product: updated, ...(synced ? { synced: true, message: "Энэ барааны нэр/үнэ/нөөц зэргийг Мэдлэгийн сангаас удирдана — тэндээс засна уу" } : {}) });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
@@ -676,7 +682,18 @@ router.patch("/orders/:id", async (req, res) => {
     if (trackingNo !== undefined) data.trackingNo = trackingNo ? String(trackingNo).slice(0, 120) : null;
     if (Object.keys(data).length === 0) return res.json({ order });
 
-    const updated = await prisma.storeOrder.update({ where: { id: order.id }, data });
+    // Төлөгдөөгүй захиалгыг ЦУЦЛАХ үед: зөвхөн status бичихээс гадна амьд QPay invoice-г хүчингүй
+    // болгож (дараа нь QR уншуулж төлөхөөс сэргийлнэ), купоны нөөцлөлтийг суллана. (Өмнө зөвхөн
+    // status бичдэг тул invoice амьд үлдэж, цуцалсан захиалга хожим PAID болдог нүх байв.)
+    const updateData = { ...data };
+    if (status === "CANCELLED" && order.qpayStatus !== "PAID" && order.status !== "PAID") {
+      const { cancelStoreOrder } = require("../services/payment.service");
+      await cancelStoreOrder(prisma, order); // status+qpayStatus=CANCELLED, invoice void, купон суллах
+      delete updateData.status; // cancelStoreOrder аль хэдийн тавьсан
+    }
+    const updated = Object.keys(updateData).length
+      ? await prisma.storeOrder.update({ where: { id: order.id }, data: updateData })
+      : await prisma.storeOrder.findUnique({ where: { id: order.id } });
     await logAudit(prisma, req, "order.update", order.id, data);
     res.json({ order: updated });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
@@ -900,10 +917,13 @@ router.post("/discounts", async (req, res) => {
     if (!["percent", "fixed"].includes(type)) return res.status(400).json({ error: "Төрөл буруу" });
     const exists = await prisma.discount.findFirst({ where: { storeId: store.id, code: norm } });
     if (exists) return res.status(409).json({ error: "Энэ код аль хэдийн байна" });
+    // percent бол 0..100-аар хязгаарлана (150% гэх мэт нь захиалгыг сөрөг/үнэгүй болгодог)
+    const clampValue = (t, v) => t === "percent" ? Math.min(100, Math.max(0, Number(v) || 0)) : Math.max(0, Number(v) || 0);
+    if (startsAt && endsAt && new Date(endsAt) <= new Date(startsAt)) return res.status(400).json({ error: "Дуусах огноо эхлэх огнооноос хойш байх ёстой" });
     const discount = await prisma.discount.create({
       data: {
         storeId: store.id, orgId: req.org.orgId, code: norm, type,
-        value: Math.max(0, Number(value) || 0),
+        value: clampValue(type, value),
         minAmount: Math.max(0, Number(minAmount) || 0),
         maxUses: maxUses ? Math.max(1, Math.floor(Number(maxUses))) : null,
         active: active !== false,
@@ -932,8 +952,14 @@ router.put("/discounts/:id", async (req, res) => {
       if (dup) return res.status(409).json({ error: "Энэ код аль хэдийн байна" });
       data.code = norm;
     }
-    if (type !== undefined) data.type = type;
-    if (value !== undefined) data.value = Math.max(0, Number(value) || 0);
+    // type солих бол баталгаажуулна (өмнө PUT type-г шалгалгүй авдаг тул fixed→percent болгож
+    // value=500 үлдээхэд 500%-ийн купон үүсдэг байв). Эцсийн type-аар percent-ийг 0..100 clamp хийнэ.
+    if (type !== undefined) {
+      if (!["percent", "fixed"].includes(type)) return res.status(400).json({ error: "Төрөл буруу" });
+      data.type = type;
+    }
+    const effType = type !== undefined ? type : existing.type;
+    if (value !== undefined) data.value = effType === "percent" ? Math.min(100, Math.max(0, Number(value) || 0)) : Math.max(0, Number(value) || 0);
     if (minAmount !== undefined) data.minAmount = Math.max(0, Number(minAmount) || 0);
     if (maxUses !== undefined) data.maxUses = maxUses ? Math.max(1, Math.floor(Number(maxUses))) : null;
     if (active !== undefined) data.active = !!active;
@@ -1018,7 +1044,7 @@ router.get("/domain/purchase/:id/status", async (req, res) => {
 
     // Төлсөн — ИДЕМПОТЕНТ биелүүлэлт (polling + webhook давхар ажиллавал ч нэг л удаа авна)
     if (order.status === "pending") {
-      const r = await fulfillDomainOrder(prisma, { vdomains, vercel }, order);
+      const r = await fulfillDomainOrder(prisma, { vdomains, vercel }, order, pay);
       if (r.status === "registered") return res.json({ status: "registered", domain: order.domain });
       if (r.status === "failed") return res.json({ status: "failed", error: "Домэйн бүртгэхэд алдаа гарлаа. Бидэнтэй холбогдоно уу." });
       return res.json({ status: r.status || "paid" });
@@ -1257,7 +1283,7 @@ router.post("/subscription/topup/:txId/check", async (req, res) => {
     if (!paid) return res.json({ status: "PENDING" });
 
     const { applyWalletTopup } = require("../services/payment.service");
-    await applyWalletTopup(prisma, tx); // идемпотент — давхар цэнэглэхгүй
+    await applyWalletTopup(prisma, tx, result); // идемпотент + дүн баталгаажуулалт
     const wallet = await prisma.webWallet.findUnique({ where: { orgId: req.org.orgId } });
 
     res.json({ status: "PAID", balance: wallet?.balance ?? 0 });

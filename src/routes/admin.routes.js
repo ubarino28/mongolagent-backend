@@ -746,27 +746,41 @@ router.get("/payouts", async (req, res) => {
 router.post("/payouts/:id/pay", async (req, res) => {
   try {
     const prisma = getPrisma();
-    const payout = await prisma.affiliatePayout.findUnique({ where: { id: req.params.id } });
-    if (!payout || payout.status !== "pending") return res.status(409).json({ error: "Хүсэлт олдсонгүй эсвэл аль хэдийн шийдэгдсэн" });
+    const note = req.body?.note ? String(req.body.note).slice(0, 300) : null;
 
-    // Энэ мерчантын олсон нийт комисс vs аль хэдийн ТӨЛСӨН нийт. Одоо төлөх дүн нэмэхэд
-    // олсноос хэтэрвэл татгалзана (давхар/хэт татахаас сэргийлнэ).
-    const [earned, paid] = await Promise.all([
-      prisma.affiliateCommission.aggregate({ where: { affiliateId: payout.affiliateId }, _sum: { amount: true } }),
-      prisma.affiliatePayout.aggregate({ where: { affiliateId: payout.affiliateId, status: "paid" }, _sum: { amount: true } }),
-    ]);
-    const earnedTotal = earned._sum.amount || 0;
-    const paidTotal = paid._sum.amount || 0;
-    if (paidTotal + payout.amount > earnedTotal) {
-      return res.status(400).json({ error: `Олсон комиссоос хэтэрч байна. Олсон: ₮${earnedTotal.toLocaleString()}, төлсөн: ₮${paidTotal.toLocaleString()}, энэ хүсэлт: ₮${payout.amount.toLocaleString()}` });
+    // АТОМИК — check(олсон vs төлсөн) + updateMany-г Serializable transaction-д хийнэ.
+    // (Өмнө 2 aggregate уншаад тусдаа updateMany хийдэг тул нэг affiliate-ийн 2 ӨӨР pending
+    //  payout-ыг зэрэг pay хийхэд хоёул paidTotal=0 уншиж давж, олсноос хэтэрдэг байв.)
+    let out;
+    try {
+      out = await prisma.$transaction(async (tx) => {
+        const payout = await tx.affiliatePayout.findUnique({ where: { id: req.params.id } });
+        if (!payout || payout.status !== "pending") return { code: 409 };
+        const [earned, paid] = await Promise.all([
+          tx.affiliateCommission.aggregate({ where: { affiliateId: payout.affiliateId }, _sum: { amount: true } }),
+          tx.affiliatePayout.aggregate({ where: { affiliateId: payout.affiliateId, status: "paid" }, _sum: { amount: true } }),
+        ]);
+        const earnedTotal = earned._sum.amount || 0;
+        const paidTotal = paid._sum.amount || 0;
+        if (paidTotal + payout.amount > earnedTotal) {
+          return { code: 400, msg: `Олсон комиссоос хэтэрч байна. Олсон: ₮${earnedTotal.toLocaleString()}, төлсөн: ₮${paidTotal.toLocaleString()}, энэ хүсэлт: ₮${payout.amount.toLocaleString()}` };
+        }
+        const r = await tx.affiliatePayout.updateMany({
+          where: { id: req.params.id, status: "pending" },
+          data: { status: "paid", paidAt: new Date(), adminNote: note },
+        });
+        if (r.count !== 1) return { code: 409 };
+        return { code: 200 };
+      }, { isolationLevel: "Serializable" });
+    } catch (e) {
+      // Serializable serialization зөрчил (зэрэг pay) → давтахыг хүснэ
+      if (e.code === "P2034" || /serializ|could not serialize/i.test(e.message || "")) {
+        return res.status(409).json({ error: "Зэрэг хүсэлт илэрлээ — дахин оролдоно уу" });
+      }
+      throw e;
     }
-
-    // Зөвхөн pending→paid шилжилт (давхар төлөхөөс сэргийлнэ)
-    const r = await prisma.affiliatePayout.updateMany({
-      where: { id: req.params.id, status: "pending" },
-      data: { status: "paid", paidAt: new Date(), adminNote: req.body?.note ? String(req.body.note).slice(0, 300) : null },
-    });
-    if (r.count !== 1) return res.status(409).json({ error: "Хүсэлт олдсонгүй эсвэл аль хэдийн шийдэгдсэн" });
+    if (out.code === 409) return res.status(409).json({ error: "Хүсэлт олдсонгүй эсвэл аль хэдийн шийдэгдсэн" });
+    if (out.code === 400) return res.status(400).json({ error: out.msg });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });

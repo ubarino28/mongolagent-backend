@@ -15,7 +15,9 @@ model Organization {
   passwordHash       String
   fbPageId           String?  @unique
   fbPageToken        String?
-  instagramAccountId String?
+  instagramAccountId String?  @unique
+  tokenVer           Int      @default(0)  // owner session цуцлалт — нууц үг солиход bump
+  subMonthsPaid      Int      @default(0)  // бодитоор төлсөн subscription-ий нийт сар — affiliate accrual-ийн найдвартай суурь
   // DEPRECATED — Telegram интеграцыг 2026-07-д бүрэн хассан (мэдэгдэл и-мэйлээр явна).
   // Багануудыг DROP хийгээгүй: production дээр ALTER DROP эргэшгүй тул хоосон үлдээв.
   // Шинэ код эдгээрийг УНШИХГҮЙ, БИЧИХГҮЙ.
@@ -77,6 +79,18 @@ model AffiliatePayout {
 
   @@index([affiliateId])
   @@index([status])
+}
+
+// Гар утасны апп-ын Expo push token. Нэг байгууллага олон төхөөрөмж (эзэн + ажилтан)-тэй байж болно.
+model PushToken {
+  id        String   @id @default(uuid())
+  orgId     String
+  token     String   @unique
+  platform  String?  // ios | android
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([orgId])
 }
 
 // Загвар (template) худалдан авалт — orgId+templateId-аар нэг л бичлэг, PAID бол эзэмшсэн
@@ -147,6 +161,9 @@ model TuruuChat {
   orgId            String?
   messages         Json     @default("[]")
   platform         String   @default("facebook")
+  name             String?
+  profilePic       String?
+  profileFetchedAt DateTime?
   blocked          Boolean  @default(false)
   aiPaused         Boolean  @default(false)
   handoffRequested Boolean   @default(false)

@@ -5,7 +5,7 @@
 // Бүх биелүүлэгч идемпотент тул polling/webhook-той зөрчилгүй.
 const qpay = require("./qpay.service");
 const subQpay = require("./subscription-qpay.service");
-const { markStoreOrderPaid, applyWalletTopup, applySubscriptionPayment } = require("./payment.service");
+const { markStoreOrderPaid, cancelStoreOrder, applyWalletTopup, applySubscriptionPayment } = require("./payment.service");
 const { fulfillDomainOrder } = require("./domain.service");
 const vdomains = require("./vercelDomains.service");
 const vercel = require("./vercel.service");
@@ -29,7 +29,18 @@ async function runReconciliation(prisma) {
       take: 200,
     });
     const r = await mapLimit(orders, RECONCILE_CONCURRENCY, async (o) => {
-      try { return isPaid(await qpay.checkPayment(o.qpayInvoiceId)) && await markStoreOrderPaid(prisma, o) ? 1 : 0; }
+      try {
+        const chk = await qpay.checkPayment(o.qpayInvoiceId);
+        // markStoreOrderPaid дотор invoice_status PAID + paidEnough(дүн) шалгагдана
+        // (өмнө reconcile нь count>0 л хангалттай гэж дүн шалгалгүй PAID болгодог байв).
+        if (await markStoreOrderPaid(prisma, o, chk)) return 1;
+        // Төлөгдөөгүй + 24ц-аас удсан PENDING захиалга → цуцалж, амьд QPay invoice болон
+        // купоны нөөцлөлтийг суллана (эс тэгвэл орхигдсон захиалга maxUses купоны слотыг үүрд барина).
+        if (Date.now() - new Date(o.createdAt).getTime() > 24 * 60 * 60 * 1000) {
+          await cancelStoreOrder(prisma, o).catch(() => {});
+        }
+        return 0;
+      }
       catch (e) { console.error(`[reconcile:orders] ${o.id}`, e.message); captureException(e, { orderId: o.id, ctx: "reconcile-order" }); return 0; }
     });
     fixed += r.reduce((s, x) => s + (x === 1 ? 1 : 0), 0);
@@ -42,7 +53,7 @@ async function runReconciliation(prisma) {
       take: 200,
     });
     const r = await mapLimit(txs, RECONCILE_CONCURRENCY, async (tx) => {
-      try { return isPaid(await subQpay.checkPayment(tx.qpayInvoiceId)) && await applyWalletTopup(prisma, tx) ? 1 : 0; }
+      try { const chk = await subQpay.checkPayment(tx.qpayInvoiceId); return isPaid(chk) && await applyWalletTopup(prisma, tx, chk) ? 1 : 0; }
       catch (e) { console.error(`[reconcile:wallet] ${tx.id}`, e.message); captureException(e, { txId: tx.id, ctx: "reconcile-wallet" }); return 0; }
     });
     fixed += r.reduce((s, x) => s + (x === 1 ? 1 : 0), 0);
@@ -55,11 +66,30 @@ async function runReconciliation(prisma) {
       take: 100,
     });
     const r = await mapLimit(domains, RECONCILE_CONCURRENCY, async (order) => {
-      try { if (isPaid(await subQpay.checkPayment(order.qpayInvoiceId))) { await fulfillDomainOrder(prisma, { vdomains, vercel }, order); return 1; } return 0; }
+      try { const chk = await subQpay.checkPayment(order.qpayInvoiceId); if (isPaid(chk)) { await fulfillDomainOrder(prisma, { vdomains, vercel }, order, chk); return 1; } return 0; }
       catch (e) { console.error(`[reconcile:domain] ${order.id}`, e.message); captureException(e, { orderId: order.id, ctx: "reconcile-domain" }); return 0; }
     });
     fixed += r.reduce((s, x) => s + (x === 1 ? 1 : 0), 0);
   } catch (e) { console.error("[reconcile:domain]", e.message); }
+
+  // 3b) "paid"-д ГАЦСАН домэйн захиалга — төлбөр авсан атлаа provision дуусаагүй (крашд).
+  //     Дахин худалдахгүй (registrar давхар төлбөрөөс сэргийлнэ) — эзэнд НЭГ УДАА мэдэгдэж
+  //     гараар дуусгуулна. errorMsg="manual-review" тэмдэглэж давтан мэдэгдэхээс сэргийлнэ.
+  try {
+    const stuck = await prisma.domainOrder.findMany({
+      where: { status: "paid", errorMsg: null, createdAt: { lt: new Date(Date.now() - 10 * 60 * 1000) } },
+      take: 50,
+    });
+    for (const o of stuck) {
+      await prisma.domainOrder.update({ where: { id: o.id }, data: { errorMsg: "manual-review: paid but not provisioned" } }).catch(() => {});
+      try {
+        require("./notify.service").notifyOwner(o.orgId, "⚠️ Домэйн бүртгэл дуусаагүй",
+          { Домэйн: o.domain, Төлбөр: "төлөгдсөн", Анхаар: "Provision дуусаагүй — гараар шалгаж дуусгах шаардлагатай" },
+          { label: "Домэйн харах", path: "/website/domain" }).catch(() => {});
+      } catch { /* мэдэгдэл — үндсэн урсгалд нөлөөлөхгүй */ }
+    }
+    if (stuck.length) console.warn(`[reconcile] ${stuck.length} domain order(s) stuck in 'paid' — owner notified`);
+  } catch (e) { console.error("[reconcile:domain-stuck]", e.message); }
 
   // 4) Subscription (platform QPay) — polling/webhook хоёулаа алдвал барих нөөц давхарга.
   //    (өмнө subscription-г reconcile огт шалгадаггүй байсан тул polling-ийн алдаатай
@@ -71,7 +101,7 @@ async function runReconciliation(prisma) {
       take: 200,
     });
     const r = await mapLimit(orgs, RECONCILE_CONCURRENCY, async (org) => {
-      try { return isPaid(await subQpay.checkPayment(org.subInvoiceId)) && (await applySubscriptionPayment(prisma, org)).applied ? 1 : 0; }
+      try { const chk = await subQpay.checkPayment(org.subInvoiceId); return isPaid(chk) && (await applySubscriptionPayment(prisma, org, chk)).applied ? 1 : 0; }
       catch (e) { console.error(`[reconcile:sub] ${org.id}`, e.message); captureException(e, { orgId: org.id, ctx: "reconcile-sub" }); return 0; }
     });
     fixed += r.reduce((s, x) => s + (x === 1 ? 1 : 0), 0);

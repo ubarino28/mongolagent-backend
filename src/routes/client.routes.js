@@ -12,6 +12,8 @@ const { requireFeature, requireOrdersFeature, getOrgPlan, kbLimit, planAllows, P
 const { logAudit } = require("../services/audit.service");
 const { saveLead, saveConsultation, saveOrder } = require("../services/lead.service");
 const { sendText } = require("../services/facebook.service");
+const { refreshChatProfile } = require("../services/contact.service");
+const { broadcastInbox } = require("../services/realtime.service");
 const storeSync = require("../services/storeSync.service");
 const cache = require("../lib/cache");
 const { mergedTemplates } = require("../lib/categoryAttributes");
@@ -165,15 +167,40 @@ router.post("/profile/facebook/select-page", requireOwner, async (req, res) => {
       return res.status(403).json({ error: "Page token баталгаажсангүй" });
     }
 
+    // Instagram эзэмшил баталгаажуулна — дамжуулсан instagramId нь ЭНЭ хуудсанд холбогдсон
+    // IG business акаунт мөн эсэх. (өмнө instagramId-г шалгалгүй хадгалдаг тул хортой хэрэглэгч
+    //  өөр хүний IG business ID-г бичиж, webhook-ийн findFirst-ээр тэр хүний IG DM-ийг өөр луугаа
+    //  татах cross-tenant хулгайн боломж байсан.)
+    if (instagramId) {
+      try {
+        const ig = await axios.get(`https://graph.facebook.com/v19.0/${pageId}`, {
+          params: { access_token: pageToken, fields: "instagram_business_account" },
+        });
+        const linkedIg = ig.data?.instagram_business_account?.id;
+        if (!linkedIg || String(linkedIg) !== String(instagramId)) {
+          return res.status(403).json({ error: "Instagram акаунт энэ хуудсанд холбогдоогүй байна" });
+        }
+      } catch (igErr) {
+        console.error("[select-page] IG verify failed:", igErr.response?.data || igErr.message);
+        return res.status(403).json({ error: "Instagram эзэмшил баталгаажсангүй" });
+      }
+    }
+
     const prisma = getPrisma();
-    await prisma.organization.update({
-      where: { id: req.org.orgId },
-      data: {
-        fbPageId: pageId,
-        fbPageToken: encrypt(pageToken), // C2: at-rest шифрлэлт (ENCRYPTION_KEY-гүй бол NO-OP)
-        ...(instagramId && { instagramAccountId: instagramId }),
-      },
-    });
+    try {
+      await prisma.organization.update({
+        where: { id: req.org.orgId },
+        data: {
+          fbPageId: pageId,
+          fbPageToken: encrypt(pageToken), // C2: at-rest шифрлэлт (ENCRYPTION_KEY-гүй бол NO-OP)
+          ...(instagramId && { instagramAccountId: instagramId }),
+        },
+      });
+    } catch (e) {
+      // fbPageId/instagramAccountId @unique — өөр байгууллага аль хэдийн эзэмшсэн бол
+      if (e.code === "P2002") return res.status(409).json({ error: "Энэ Facebook хуудас/Instagram өөр бүртгэлд холбогдсон байна" });
+      throw e;
+    }
     res.json({ ok: true, pageName });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
@@ -316,6 +343,11 @@ router.get("/conversations", async (req, res) => {
       messageCount: Array.isArray(c.messages) ? c.messages.length : 0,
       lastMessage: Array.isArray(c.messages) && c.messages.length > 0 ? c.messages[c.messages.length - 1] : null,
     }));
+    // Хуучин ярианы нэр/зургийг аажим нөхнө: нэг хүсэлтэд хамгийн ихдээ 8 (хэзээ ч татаж
+    // үзээгүй) харилцагчийг background-д татна. Татсаны дараа profileFetchedAt тэмдэглэгдэж
+    // дараагийн poll-д алгасагдана — ингэж хэдхэн poll-ын дотор бүх жагсаалт нэртэй болно.
+    data.filter((c) => !c.profileFetchedAt).slice(0, 8)
+      .forEach((c) => refreshChatProfile(orgId, c.psid).catch(() => {}));
     res.json({ data: enriched, total, page: Number(page), pages: Math.ceil(total / take) });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
@@ -326,6 +358,9 @@ router.get("/conversations/:psid", async (req, res) => {
     const prisma = getPrisma();
     const chat = await prisma.turuuChat.findFirst({ where: { psid: req.params.psid, orgId: req.org.orgId } });
     if (!chat) return res.status(404).json({ error: "Not found" });
+    // Нэр байхгүй бол Graph API-аас background-д татна (хуучин ярианы баталгаат backfill).
+    // Хариуг блоклохгүй — дараагийн poll (5с)-д нэр гарч ирнэ.
+    if (!chat.name) refreshChatProfile(req.org.orgId, req.params.psid).catch(() => {});
     res.json(chat);
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
@@ -349,6 +384,7 @@ router.post("/conversations/:psid/reply", async (req, res) => {
       create: { psid: req.params.psid, orgId: req.org.orgId, messages, aiPaused: true, handoffRequested: true, handoffAt: new Date() },
       update: { messages, aiPaused: true, handoffRequested: true, handoffAt: new Date() },
     });
+    broadcastInbox(req.org.orgId, req.params.psid); // realtime: бусад нээлттэй дашбордад шинэчилнэ
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
@@ -390,6 +426,18 @@ router.put("/conversations/:psid/ai-pause", async (req, res) => {
       update: { aiPaused: paused },
     });
     res.json({ ok: true, aiPaused: paused });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// DELETE /client/conversations/:psid — Харилцагчийн яриаг бүрмөсөн устгах.
+// orgId-оор хамгаалж deleteMany (өөр tenant-ийн яриа устгахаас сэргийлнэ).
+router.delete("/conversations/:psid", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const result = await prisma.turuuChat.deleteMany({
+      where: { psid: req.params.psid, orgId: req.org.orgId },
+    });
+    res.json({ ok: true, deleted: result.count });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
@@ -2097,7 +2145,7 @@ router.get("/orders", async (req, res) => {
 });
 
 // POST /client/orders
-router.post("/orders", requireFeature("orders"), async (req, res) => {
+router.post("/orders", requireFeature("orders"), blockIfExpired, async (req, res) => {
   try {
     const { customerName, customerPhone, customerEmail, deliveryAddress, items, totalAmount, notes, psid, status } = req.body;
     const prisma = getPrisma();
@@ -2215,8 +2263,17 @@ router.put("/profile/password", requireOwner, async (req, res) => {
     const valid = await bcrypt.compare(currentPassword, org.passwordHash);
     if (!valid) return res.status(400).json({ error: "Одоогийн нууц үг буруу байна" });
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await prisma.organization.update({ where: { id: req.org.orgId }, data: { passwordHash } });
-    res.json({ ok: true });
+    // tokenVer++ → бүх ХУУЧИН owner session цуцлагдана (хулгайлагдсан токен ч хамаарна).
+    const updated = await prisma.organization.update({
+      where: { id: req.org.orgId },
+      data: { passwordHash, tokenVer: { increment: 1 } },
+      select: { id: true, slug: true, name: true, plan: true, tokenVer: true },
+    });
+    try { require("../middleware/clientAuth").invalidateAuthCache(req.org.orgId); } catch { /* кэш 60с-д өөрөө шинэчлэгдэнэ */ }
+    // Одоогийн хэрэглэгчийн session тасрахгүйн тулд шинэ токен буцаана (frontend хадгална).
+    const { jwtSecret } = require("../lib/jwtSecret");
+    const token = jwt.sign({ orgId: updated.id, slug: updated.slug, name: updated.name, plan: updated.plan, role: "owner", tv: updated.tokenVer }, jwtSecret(), { expiresIn: "7d" });
+    res.json({ ok: true, token });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
@@ -2394,12 +2451,31 @@ router.post("/affiliate/withdraw", requireOwner, async (req, res) => {
     const requested = Math.floor(Number(req.body?.amount) || 0);
     if (requested < affiliate.MIN_WITHDRAW) return res.status(400).json({ error: `Хамгийн багадаа ₮${affiliate.MIN_WITHDRAW.toLocaleString()} татна` });
 
-    const balance = await affiliate.getBalance(prisma, orgId);
-    if (requested > balance.available) return res.status(400).json({ error: "Боломжит үлдэгдэлээс их дүн байна" });
-
-    const payout = await prisma.affiliatePayout.create({
-      data: { id: require("crypto").randomUUID(), affiliateId: orgId, amount: requested, status: "pending", bankSnapshot: org.payoutBank },
-    });
+    // АТОМИК — баланс шалгалт + payout үүсгэлтийг Serializable transaction-д хийнэ.
+    // (Өмнө getBalance уншаад тусдаа create хийдэг тул 2 хүсэлт зэрэг ирвэл хоёул бүтэн
+    //  балансыг харж хоёул pending payout үүсгэж, олсноос хэтэрдэг TOCTOU байв.)
+    let out;
+    try {
+      out = await prisma.$transaction(async (tx) => {
+        const [earned, locked] = await Promise.all([
+          tx.affiliateCommission.aggregate({ where: { affiliateId: orgId }, _sum: { amount: true } }),
+          tx.affiliatePayout.aggregate({ where: { affiliateId: orgId, status: { in: ["paid", "pending"] } }, _sum: { amount: true } }),
+        ]);
+        const available = Math.max(0, (earned._sum.amount || 0) - (locked._sum.amount || 0));
+        if (requested > available) return { error: "Боломжит үлдэгдэлээс их дүн байна" };
+        const payout = await tx.affiliatePayout.create({
+          data: { id: require("crypto").randomUUID(), affiliateId: orgId, amount: requested, status: "pending", bankSnapshot: org.payoutBank },
+        });
+        return { payout };
+      }, { isolationLevel: "Serializable" });
+    } catch (e) {
+      if (e.code === "P2034" || /serializ|could not serialize/i.test(e.message || "")) {
+        return res.status(409).json({ error: "Зэрэг хүсэлт илэрлээ — дахин оролдоно уу" });
+      }
+      throw e;
+    }
+    if (out.error) return res.status(400).json({ error: out.error });
+    const payout = out.payout;
     // Эзэнд мэдэгдэл (туслах урсгал)
     try {
       const { notifyOwner } = require("../services/notify.service");
@@ -2552,11 +2628,12 @@ router.post("/billing/pay", requireOwner, async (req, res) => {
       data: { subInvoiceId: result.invoice_id, subQpayStatus: "PENDING" },
     });
 
-    // Хүлээгдэж буй план + хугацаа (сар)-ыг хадгална — төлбөр батлагдахад applySubscriptionPayment ашиглана
+    // Хүлээгдэж буй план + хугацаа (сар) + ДҮН-г хадгална — төлбөр батлагдахад applySubscriptionPayment
+    // нь энэ дүнг paidEnough-аар шалгана (дутуу төлбөрөөр эрх нээхээс сэргийлнэ).
     await prisma.turuuSettings.upsert({
       where: { orgId_key: { orgId: org.id, key: "pending_subscription" } },
-      create: { orgId: org.id, key: "pending_subscription", value: JSON.stringify({ plan, months }) },
-      update: { value: JSON.stringify({ plan, months }) },
+      create: { orgId: org.id, key: "pending_subscription", value: JSON.stringify({ plan, months, amount }) },
+      update: { value: JSON.stringify({ plan, months, amount }) },
     });
 
     res.json({ ok: true, invoiceId: result.invoice_id, qrText: result.qr_text, qrImage: result.qr_image, urls: result.urls });
@@ -2584,7 +2661,7 @@ router.post("/billing/pay/check", requireOwner, async (req, res) => {
       // webhook-тэй ИЖИЛ shared helper-ээр эрхийг 30 хоног сунгана.
       // (өмнө энд зөвхөн subQpayStatus="PAID" тавьдаг байсан тул эрх сунгагдахгүй,
       //  улмаар дараагийн webhook count=0 болж сунгалт үүрд алдагддаг байсан.)
-      await applySubscriptionPayment(prisma, org);
+      await applySubscriptionPayment(prisma, org, result);
     }
 
     res.json({ paid, result });
@@ -2639,7 +2716,7 @@ router.post("/billing/topup/check", requireOwner, async (req, res) => {
     const paid = result.invoice_status === "PAID" || (result.count != null && result.count > 0) || result.payment_status === "PAID";
 
     if (paid) {
-      const { applied, added, remaining } = await applyTopupPayment(prisma, orgId);
+      const { applied, added, remaining } = await applyTopupPayment(prisma, orgId, result);
       return res.json({ paid: true, applied, added, remaining });
     }
     res.json({ paid: false });
@@ -2728,6 +2805,15 @@ router.post("/chat", blockIfExpired, async (req, res) => {
     if (!message?.trim()) return res.status(400).json({ error: "message шаардлагатай" });
 
     const orgId = req.org.orgId;
+    // #23: үнэгүй тест эрх (100/сар) дууссаны дараа мессежийн quota дүүрсэн бол блоклоно —
+    // идэвхтэй мерчант дүүрсэн эрхээр тест чатаар хязгааргүй OpenAI зардал гаргахаас сэргийлнэ.
+    try {
+      const { peekTestChatFree, getQuotaStatus } = require("../lib/quota");
+      if (!(await peekTestChatFree(orgId))) {
+        const qs = await getQuotaStatus(orgId);
+        if (qs?.exhausted) return res.status(402).json({ error: "Мессежийн эрх дууссан байна. Багцаа сунгах эсвэл нэмэлт эрх авна уу.", code: "QUOTA_EXHAUSTED" });
+      }
+    } catch { /* шалгалт унавал блоклохгүй */ }
     const { buildSystemPrompt } = require("../lib/prompt");
     const OpenAI = require("openai");
 
@@ -3024,7 +3110,10 @@ router.post("/profile/email/verify", requireOwner, async (req, res) => {
     });
 
     if (!token) return res.status(400).json({ error: "Код хүчингүй эсвэл хугацаа дууссан байна" });
-    if (token.code !== code.toString()) return res.status(400).json({ error: "Код буруу байна" });
+    // Timing-safe харьцуулалт — 6 оронтой кодыг тэмдэгт бүрийн хугацаагаар таамаглахаас сэргийлнэ
+    const _a = Buffer.from(String(token.code || ""), "utf8");
+    const _b = Buffer.from(String(code ?? ""), "utf8");
+    if (_a.length !== _b.length || !crypto.timingSafeEqual(_a, _b)) return res.status(400).json({ error: "Код буруу байна" });
 
     // Email шинэчлэх
     await prisma.organization.update({ where: { id: req.org.orgId }, data: { email: token.newEmail } });
@@ -3091,11 +3180,22 @@ router.put("/profile/facebook", requireOwner, async (req, res) => {
   try {
     const { fbPageId, fbPageToken } = req.body;
     if (!fbPageId || !fbPageToken) return res.status(400).json({ error: "fbPageId, fbPageToken шаардлагатай" });
+    // Эзэмшил баталгаажуулна — дамжуулсан токен тухайн pageId-г ҮНЭХЭЭР удирддаг эсэх.
+    // (Өмнө шалгалтгүй тул өөр хүний fbPageId-г булааж, токеныг plaintext хадгалдаг байв.)
+    try {
+      const me = await axios.get("https://graph.facebook.com/v19.0/me", { params: { access_token: fbPageToken, fields: "id" } });
+      if (!me.data?.id || String(me.data.id) !== String(fbPageId)) return res.status(403).json({ error: "Page token энэ хуудсанд тохирохгүй байна" });
+    } catch { return res.status(403).json({ error: "Page token баталгаажсангүй" }); }
     const prisma = getPrisma();
-    await prisma.organization.update({
-      where: { id: req.org.orgId },
-      data: { fbPageId, fbPageToken },
-    });
+    try {
+      await prisma.organization.update({
+        where: { id: req.org.orgId },
+        data: { fbPageId, fbPageToken: encrypt(fbPageToken) }, // at-rest шифрлэлт (select-page-тэй адил)
+      });
+    } catch (e) {
+      if (e.code === "P2002") return res.status(409).json({ error: "Энэ Facebook хуудас өөр бүртгэлд холбогдсон байна" });
+      throw e;
+    }
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
@@ -3664,6 +3764,28 @@ router.post("/orders/:id/check-payment", async (req, res) => {
     }
 
     res.json({ paid, qpayStatus: paid ? "PAID" : "PENDING", result });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// ─── PUSH NOTIFICATION (гар утасны апп) ──────────────────────────────────────
+// POST /client/push/register — Expo push token хадгалах (нэвтэрсэн ямар ч төхөөрөмж)
+router.post("/push/register", async (req, res) => {
+  try {
+    const { token, platform } = req.body || {};
+    const { registerToken } = require("../services/push.service");
+    const ok = await registerToken(req.org.orgId, token, platform);
+    if (!ok) return res.status(400).json({ error: "Хүчингүй token" });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /client/push/unregister — гарах/мэдэгдэл унтраахад token устгах
+router.post("/push/unregister", async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    const { removeToken } = require("../services/push.service");
+    await removeToken(token);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 
