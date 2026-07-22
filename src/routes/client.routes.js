@@ -11,7 +11,7 @@ const { clientAuthMiddleware, blockIfExpired } = require("../middleware/clientAu
 const { requireFeature, requireOrdersFeature, getOrgPlan, kbLimit, planAllows, PLAN_LABEL } = require("../lib/planFeatures");
 const { logAudit } = require("../services/audit.service");
 const { saveLead, saveConsultation, saveOrder } = require("../services/lead.service");
-const { sendText, subscribePageWebhooks } = require("../services/facebook.service");
+const { sendText, subscribePageWebhooks, unsubscribePageWebhooks, getConnectionInfo } = require("../services/facebook.service");
 const { refreshChatProfile } = require("../services/contact.service");
 const { broadcastInbox } = require("../services/realtime.service");
 const storeSync = require("../services/storeSync.service");
@@ -209,6 +209,56 @@ router.post("/profile/facebook/select-page", requireOwner, async (req, res) => {
     if (!sub.ok) console.warn("[select-page] webhook subscribe амжилтгүй:", sub.error);
 
     res.json({ ok: true, pageName, subscribed: sub.ok });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// GET /client/profile/connection — холбогдсон Page + Instagram-ийн НЭР/ЗУРАГ (түүхий ID биш).
+// Graph API-аас нэг дуудлагаар авч 5 минут кэшлэнэ. Тохиргооны хуудсанд харуулна.
+router.get("/profile/connection", async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({
+      where: { id: req.org.orgId },
+      select: { fbPageId: true, fbPageToken: true, instagramAccountId: true },
+    });
+    if (!org?.fbPageId || !org?.fbPageToken) {
+      return res.json({ facebook: { connected: false }, instagram: { connected: false } });
+    }
+    const info = await cache.getOrSet(`fbconn:${req.org.orgId}:${org.fbPageId}`, 5 * 60_000, async () => {
+      return getConnectionInfo(org.fbPageId, decrypt(org.fbPageToken));
+    });
+    res.json({
+      facebook: {
+        connected: true,
+        pageId: org.fbPageId,
+        name: info?.page?.name || null,
+        picture: info?.page?.picture || null,
+      },
+      instagram: info?.instagram
+        ? { connected: true, ...info.instagram }
+        : (org.instagramAccountId ? { connected: true, id: org.instagramAccountId } : { connected: false }),
+    });
+  } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
+});
+
+// POST /client/profile/facebook/disconnect — холбогдсон Page/Instagram-г салгана.
+// Webhook subscription-ыг Meta-аас устгаад (best-effort), org-оос холболтын мэдээллийг цэвэрлэнэ.
+router.post("/profile/facebook/disconnect", requireOwner, async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const org = await prisma.organization.findUnique({
+      where: { id: req.org.orgId },
+      select: { fbPageId: true, fbPageToken: true },
+    });
+    // Meta-аас webhook subscription устгах — дэмий webhook явуулахгүй болно (амжилтгүй ч үргэлжлүүлнэ)
+    if (org?.fbPageId && org?.fbPageToken) {
+      unsubscribePageWebhooks(org.fbPageId, decrypt(org.fbPageToken)).catch(() => {});
+    }
+    await prisma.organization.update({
+      where: { id: req.org.orgId },
+      data: { fbPageId: null, fbPageToken: null, instagramAccountId: null },
+    });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: (console.error("[err]", e && e.message), "Серверийн алдаа гарлаа") }); }
 });
 

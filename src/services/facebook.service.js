@@ -80,6 +80,48 @@ async function subscribePageWebhooks(pageId, pageToken) {
   }
 }
 
+// Page-ийг апп-ын webhook-оос салгана (disconnect үед). Best-effort — амжилтгүй ч холболтыг цэвэрлэнэ.
+async function unsubscribePageWebhooks(pageId, pageToken) {
+  const token = pageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+  if (!token || !pageId) return { ok: false };
+  try {
+    await axios.delete(`https://graph.facebook.com/v19.0/${encodeURIComponent(pageId)}/subscribed_apps`, {
+      params: { access_token: token },
+      timeout: 8000,
+    });
+    return { ok: true };
+  } catch (err) {
+    console.error("[FB] unsubscribe error:", err.response?.data || err.message);
+    return { ok: false };
+  }
+}
+
+// Холбогдсон Page + Instagram-ийн нэр/зургийг Graph API-аас нэг дуудлагаар авна.
+// Тохиргооны хуудсанд түүхий ID биш, жинхэнэ нэр+профайл харуулахад ашиглана.
+async function getConnectionInfo(pageId, pageToken) {
+  const token = pageToken || process.env.FB_PAGE_ACCESS_TOKEN;
+  if (!token || !pageId) return null;
+  try {
+    const { data } = await axios.get(`https://graph.facebook.com/v19.0/${encodeURIComponent(pageId)}`, {
+      params: {
+        fields: "name,picture{url},instagram_business_account{username,name,profile_picture_url}",
+        access_token: token,
+      },
+      timeout: 8000,
+    });
+    const ig = data.instagram_business_account;
+    return {
+      page: { id: String(pageId), name: data.name || null, picture: data.picture?.data?.url || null },
+      instagram: ig
+        ? { id: ig.id, username: ig.username || null, name: ig.name || null, picture: ig.profile_picture_url || null }
+        : null,
+    };
+  } catch (err) {
+    console.error("[FB] connection info error:", err.response?.data || err.message);
+    return null;
+  }
+}
+
 function splitMessage(text, maxLen) {
   if (text.length <= maxLen) return [text];
   const parts = [];
@@ -96,4 +138,4 @@ function splitMessage(text, maxLen) {
   return parts.filter(Boolean);
 }
 
-module.exports = { sendText, sendTypingOn, getUserProfile, subscribePageWebhooks };
+module.exports = { sendText, sendTypingOn, getUserProfile, subscribePageWebhooks, unsubscribePageWebhooks, getConnectionInfo };
